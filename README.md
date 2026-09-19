@@ -38,10 +38,12 @@ feature development given that.
 
 ## Install
 
-Not yet published to PyPI/npm — install straight from GitHub:
+Not yet published to PyPI/npm — install straight from GitHub. Pin to
+the [latest tagged release](https://github.com/experimental-gains/slopcheck/releases)
+for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.0
 ```
 
 ## Usage
@@ -66,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.0
     slopcheck
 ```
 
