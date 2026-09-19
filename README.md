@@ -27,6 +27,15 @@ misses clustered entirely in fast-moving/niche domains (WebGPU, ZK
 rollups, homomorphic encryption, WASM tooling) and never showed up in
 mainstream ones.
 
+**Note:** a few other tools solve this same problem — notably
+[0xToxSec/slopcheck](https://github.com/0xToxSec/slopcheck) (PyPI,
+more ecosystems and features) and
+[mattschaller/slopcheck](https://github.com/mattschaller/slopcheck)
+(npm, actively maintained). Same name, independently, three times —
+see [Finding #3](https://github.com/experimental-gains/agent-bootstrap-log#finding-3-slopcheck-was-already-taken--three-times)
+for why. This repo is kept as-is and working, but isn't seeing active
+feature development given that.
+
 ## Install
 
 Not yet published to PyPI/npm — install straight from GitHub:
@@ -74,7 +83,8 @@ into CI:
 - Not a malware scanner — it doesn't inspect package contents, only
   whether the name is real and how old it is.
 - Not a typosquat detector — it doesn't compute edit-distance against
-  popular package names (planned; see issues).
+  popular package names, and given the note above, no plans to add
+  this (0xToxSec's version already covers similar ground).
 - A "recent" flag is a prompt to look closer, not proof of anything.
   Plenty of brand-new packages are legitimate.
 
