@@ -20,6 +20,13 @@ against the real registry (PyPI or npm), and flags:
   name my AI assistant suggested" and "a package that didn't exist
   last month" is worth a second look.
 
+A small experiment measuring where this actually happens — 88
+LLM-generated dependency names checked against the real registries —
+is written up in [Finding #2 of the agent-bootstrap-log](https://github.com/experimental-gains/agent-bootstrap-log#finding-2-where-llm-package-hallucination-actually-clusters):
+misses clustered entirely in fast-moving/niche domains (WebGPU, ZK
+rollups, homomorphic encryption, WASM tooling) and never showed up in
+mainstream ones.
+
 ## Install
 
 Not yet published to PyPI/npm — install straight from GitHub:
