@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.5
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.6
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.5
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.6
     slopcheck
 ```
 
@@ -104,6 +104,14 @@ a package under a local rename or alongside another version of itself)
 local alias key — the alias key is never expected to exist in the
 registry under its own name (fixed in v0.1.2 — earlier versions checked
 the alias key itself and flagged legitimate aliases as "not found").
+
+npm's `overrides` field and Yarn's `resolutions` field (both used to
+force a specific version of a package anywhere in the dependency tree,
+not just top-level deps) are checked too, including nested `overrides`
+entries and `resolutions` patterns that target a scoped package deep in
+the tree (e.g. `"webpack/**/@babel/core"`) (added in v0.1.6 — earlier
+versions didn't read either field at all, so a hallucinated name placed
+there was never checked).
 
 Poetry's table-form dependencies (`{ git = "..." }`, `{ path = "..." }`,
 `{ url = "..." }`) point at a git remote, a local path, or an arbitrary

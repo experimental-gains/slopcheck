@@ -144,6 +144,49 @@ def _npm_alias_target(spec: str) -> str:
     return rest[:at] if at != -1 else rest
 
 
+def _npm_overrides_deps(overrides: dict) -> list[str]:
+    """Flatten npm's `overrides` field into the package names it references.
+
+    Each key names a package somewhere in the dependency tree; a string
+    value pins its version (or, via an `npm:` alias, substitutes a
+    different package entirely — same aliasing rule as regular
+    dependencies above). A key can also map to a nested object instead of
+    a version string — npm's syntax for "when resolving X's dependency on
+    Y, use this" — where `"."` re-pins X itself and every other key is
+    another package name one level further down the chain. Both the outer
+    and nested keys are real package names that belong on npm and can
+    just as easily be hallucinated as a top-level dependency.
+    """
+    names = []
+    for name, value in overrides.items():
+        if name == ".":
+            continue
+        if isinstance(value, str) and value.startswith(_NPM_ALIAS_PREFIX):
+            names.append(_npm_alias_target(value))
+        else:
+            names.append(name)
+        if isinstance(value, dict):
+            names.extend(_npm_overrides_deps(value))
+    return names
+
+
+def _yarn_resolution_target(pattern: str) -> str:
+    """Extract the package name from a Yarn `resolutions` pattern.
+
+    A pattern is a `/`-separated path through the dependency tree (e.g.
+    `webpack/**/ws` or `**/lodash`), optionally with `**` wildcard
+    segments; the package actually being pinned is the last real segment.
+    Scoped packages (`@babel/core`) contain their own `/`, so a trailing
+    `@scope` segment is rejoined with the name segment after it.
+    """
+    segments = [s for s in pattern.split("/") if s and s != "**"]
+    if not segments:
+        return pattern
+    if len(segments) >= 2 and segments[-2].startswith("@"):
+        return f"{segments[-2]}/{segments[-1]}"
+    return segments[-1]
+
+
 def parse_package_json(path: Path) -> list[Dependency]:
     data = json.loads(path.read_text())
     deps = []
@@ -154,6 +197,10 @@ def parse_package_json(path: Path) -> list[Dependency]:
             elif isinstance(version, str) and version.startswith(_NON_REGISTRY_PREFIXES):
                 continue
             deps.append(Dependency(name, "npm", str(path)))
+    for name in _npm_overrides_deps(data.get("overrides", {})):
+        deps.append(Dependency(name, "npm", str(path)))
+    for pattern in data.get("resolutions", {}):
+        deps.append(Dependency(_yarn_resolution_target(pattern), "npm", str(path)))
     return deps
 
 

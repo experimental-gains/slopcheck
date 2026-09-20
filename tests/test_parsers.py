@@ -121,6 +121,46 @@ def test_parse_package_json_resolves_npm_alias_target(tmp_path: Path):
     assert names == {"lodash", "@babel/core", "left-pad", "react"}
 
 
+def test_parse_package_json_reads_npm_overrides(tmp_path: Path):
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {"express": "^4.19.2"},
+                "overrides": {
+                    "semver": "^7.5.2",
+                    "foo": {
+                        ".": "1.0.0",
+                        "bar": "1.2.3",
+                    },
+                    "aliased": "npm:real-target@^1.0.0",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"express", "semver", "foo", "bar", "real-target"}
+
+
+def test_parse_package_json_reads_yarn_resolutions(tmp_path: Path):
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {"express": "^4.19.2"},
+                "resolutions": {
+                    "graceful-fs": "^4.2.11",
+                    "**/lodash": "^4.17.21",
+                    "webpack/**/ws": "^7.4.6",
+                    "some-pkg/@babel/core": "^7.20.0",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"express", "graceful-fs", "lodash", "ws", "@babel/core"}
+
+
 def test_parse_pyproject_pep621(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
