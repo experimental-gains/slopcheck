@@ -62,6 +62,24 @@ def test_parse_package_json_skips_non_registry_protocols(tmp_path: Path):
     assert names == {"react"}
 
 
+def test_parse_package_json_resolves_npm_alias_target(tmp_path: Path):
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "my-lodash-alias": "npm:lodash@^4.17.21",
+                    "scoped-alias": "npm:@babel/core@^7.0.0",
+                    "unversioned-alias": "npm:left-pad",
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"lodash", "@babel/core", "left-pad", "react"}
+
+
 def test_parse_pyproject_pep621(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(

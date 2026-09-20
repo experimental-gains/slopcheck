@@ -86,13 +86,33 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
 # registry produces a false "not found" on every workspace monorepo.
 _NON_REGISTRY_PREFIXES = ("workspace:", "file:", "link:", "portal:", "git:", "git+", "github:")
 
+_NPM_ALIAS_PREFIX = "npm:"
+
+
+def _npm_alias_target(spec: str) -> str:
+    """Resolve the real package name behind an `npm:` alias spec.
+
+    `"local-name": "npm:real-name@1.2.3"` installs `real-name` under the
+    key `local-name` — a legitimate npm/pnpm/Yarn feature for depending on
+    a package under a different local name (renames, multiple versions of
+    the same package side by side). Unlike workspace:/file:/git:, the
+    target here *is* a registry name and can itself be hallucinated, so it
+    needs to be extracted and checked rather than skipped like the other
+    protocols.
+    """
+    rest = spec[len(_NPM_ALIAS_PREFIX):]
+    at = rest.find("@", 1) if rest.startswith("@") else rest.find("@")
+    return rest[:at] if at != -1 else rest
+
 
 def parse_package_json(path: Path) -> list[Dependency]:
     data = json.loads(path.read_text())
     deps = []
     for section in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
         for name, version in data.get(section, {}).items():
-            if isinstance(version, str) and version.startswith(_NON_REGISTRY_PREFIXES):
+            if isinstance(version, str) and version.startswith(_NPM_ALIAS_PREFIX):
+                name = _npm_alias_target(version)
+            elif isinstance(version, str) and version.startswith(_NON_REGISTRY_PREFIXES):
                 continue
             deps.append(Dependency(name, "npm", str(path)))
     return deps

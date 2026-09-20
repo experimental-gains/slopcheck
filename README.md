@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.1
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.2
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.1
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.2
     slopcheck
 ```
 
@@ -97,6 +97,13 @@ into CI:
 point somewhere other than the public registry, so slopcheck skips them
 rather than flagging every internal package name in a Turborepo/Nx/Lerna
 monorepo as "not found" (fixed in v0.1.1 — v0.1.0 falsely flagged these).
+
+`npm:` aliases (`"my-name": "npm:real-package@1.2.3"`, used to depend on
+a package under a local rename or alongside another version of itself)
+*are* checked, but against the real target package name rather than the
+local alias key — the alias key is never expected to exist in the
+registry under its own name (fixed in v0.1.2 — earlier versions checked
+the alias key itself and flagged legitimate aliases as "not found").
 
 ## Development
 
