@@ -26,6 +26,19 @@ _REQ_LINE_RE = re.compile(
     r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[<>=!~;].*)?$"
 )
 
+# pip treats a `#` as starting a trailing comment as long as it's preceded by
+# whitespace (or starts the line) — e.g. "requests  # http client". Without
+# stripping this, a plain unpinned dependency followed by an explanatory
+# comment fails the regex above (it isn't a version specifier) and gets
+# silently dropped instead of checked, which is a real, common style in
+# hand-written requirements.txt files.
+_INLINE_COMMENT_RE = re.compile(r"(?:^|\s)#")
+
+
+def _strip_inline_comment(line: str) -> str:
+    match = _INLINE_COMMENT_RE.search(line)
+    return line[: match.start()].rstrip() if match else line
+
 
 def parse_requirements_txt(path: Path) -> list[Dependency]:
     deps = []
@@ -36,6 +49,9 @@ def parse_requirements_txt(path: Path) -> list[Dependency]:
         if line.startswith(("-r ", "-e ", "--", "-c ")):
             continue
         if "://" in line:
+            continue
+        line = _strip_inline_comment(line)
+        if not line:
             continue
         match = _REQ_LINE_RE.match(line)
         if match:

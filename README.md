@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.2
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.3
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.2
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.3
     slopcheck
 ```
 
@@ -104,6 +104,17 @@ a package under a local rename or alongside another version of itself)
 local alias key — the alias key is never expected to exist in the
 registry under its own name (fixed in v0.1.2 — earlier versions checked
 the alias key itself and flagged legitimate aliases as "not found").
+
+## requirements.txt inline comments
+
+A `requirements.txt` line with an explanatory trailing comment and no
+version pin (e.g. `pandas    # used widely`, a common style — see
+[nuPlan's](https://github.com/motional/nuplan-devkit/blob/master/requirements.txt)
+for a real example) is parsed correctly: the comment is stripped the
+same way `pip` itself treats it, and the dependency is still checked
+(fixed in v0.1.3 — earlier versions silently dropped these lines
+instead of checking them, which meant a hallucinated package name with
+a trailing comment would never get flagged at all).
 
 ## Development
 

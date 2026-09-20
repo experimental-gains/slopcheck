@@ -29,6 +29,26 @@ def test_parse_requirements_txt(tmp_path: Path):
     assert names == {"requests", "numpy", "flask", "django"}
 
 
+def test_parse_requirements_txt_strips_inline_comments(tmp_path: Path):
+    # Real-world style seen across many public requirements.txt files
+    # (e.g. nuPlan's): an unpinned name followed by an explanatory comment.
+    # Without stripping the comment, these dependencies were silently
+    # dropped from checking entirely instead of being flagged or verified.
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "\n".join(
+            [
+                "pandas    # Used widely",
+                "pyarrow # For parquet",
+                "requests==2.31.0  # pinned, has a comment too",
+                "flask[async]  # extras, no version, still a comment",
+            ]
+        )
+    )
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"pandas", "pyarrow", "requests", "flask"}
+
+
 def test_parse_package_json(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
