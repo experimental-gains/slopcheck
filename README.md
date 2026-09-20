@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.6
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.7
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.6
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.7
     slopcheck
 ```
 
@@ -111,7 +111,12 @@ not just top-level deps) are checked too, including nested `overrides`
 entries and `resolutions` patterns that target a scoped package deep in
 the tree (e.g. `"webpack/**/@babel/core"`) (added in v0.1.6 — earlier
 versions didn't read either field at all, so a hallucinated name placed
-there was never checked).
+there was never checked). An `overrides` key can also carry a
+`@version` suffix to scope the override to one resolved version of the
+package (e.g. `"kerberos@2.1.1": { "node-addon-api": "7.1.0" }`) — the
+suffix is stripped before checking, so this resolves to `kerberos`, not
+the literal string `kerberos@2.1.1` (fixed in v0.1.7 — earlier versions
+checked the version-and-all string and always flagged it "not found").
 
 Poetry's table-form dependencies (`{ git = "..." }`, `{ path = "..." }`,
 `{ url = "..." }`) point at a git remote, a local path, or an arbitrary

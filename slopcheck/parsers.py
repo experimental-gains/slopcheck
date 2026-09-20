@@ -144,6 +144,20 @@ def _npm_alias_target(spec: str) -> str:
     return rest[:at] if at != -1 else rest
 
 
+def _override_key_name(key: str) -> str:
+    """Strip npm's optional `@version` scope suffix from an overrides key.
+
+    `"foo@1.0.0": {"bar": "1.0.0"}` scopes the override to only apply
+    when the resolved `foo` is exactly that version — real npm syntax
+    (e.g. vscode's `package.json` uses `"kerberos@2.1.1"` to override
+    `node-addon-api` only for that specific `kerberos` version). Without
+    stripping it, the version-and-all string gets checked against the
+    registry as if it were the package name and never matches.
+    """
+    at = key.find("@", 1) if key.startswith("@") else key.find("@")
+    return key[:at] if at != -1 else key
+
+
 def _npm_overrides_deps(overrides: dict) -> list[str]:
     """Flatten npm's `overrides` field into the package names it references.
 
@@ -164,7 +178,7 @@ def _npm_overrides_deps(overrides: dict) -> list[str]:
         if isinstance(value, str) and value.startswith(_NPM_ALIAS_PREFIX):
             names.append(_npm_alias_target(value))
         else:
-            names.append(name)
+            names.append(_override_key_name(name))
         if isinstance(value, dict):
             names.extend(_npm_overrides_deps(value))
     return names

@@ -142,6 +142,29 @@ def test_parse_package_json_reads_npm_overrides(tmp_path: Path):
     assert names == {"express", "semver", "foo", "bar", "real-target"}
 
 
+def test_parse_package_json_reads_npm_overrides_with_version_scoped_key(tmp_path: Path):
+    # Real-world style seen in vscode's package.json: a key of the form
+    # "pkg@version" scopes the override to only that resolved version of
+    # pkg. Without stripping the "@version" suffix, the whole string got
+    # checked against the registry as a package name and never matched.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {"kerberos": "2.1.1"},
+                "overrides": {
+                    "kerberos@2.1.1": {
+                        "node-addon-api": "7.1.0",
+                    },
+                    "@babel/core@7.20.0": "7.20.1",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"kerberos", "node-addon-api", "@babel/core"}
+
+
 def test_parse_package_json_reads_yarn_resolutions(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
