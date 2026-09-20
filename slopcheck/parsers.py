@@ -48,10 +48,10 @@ def parse_requirements_txt(path: Path) -> list[Dependency]:
             continue
         if line.startswith(("-r ", "-e ", "--", "-c ")):
             continue
-        if "://" in line:
-            continue
         line = _strip_inline_comment(line)
         if not line:
+            continue
+        if "://" in line:
             continue
         match = _REQ_LINE_RE.match(line)
         if match:

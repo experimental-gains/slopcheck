@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.4
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.5
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.4
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.5
     slopcheck
 ```
 
@@ -126,6 +126,15 @@ same way `pip` itself treats it, and the dependency is still checked
 (fixed in v0.1.3 — earlier versions silently dropped these lines
 instead of checking them, which meant a hallucinated package name with
 a trailing comment would never get flagged at all).
+
+A comment that itself mentions a URL (e.g. `requests>=2.0  # docs:
+https://requests.readthedocs.io`, common when a comment links to a
+package's homepage or docs) no longer causes the whole line to be
+mistaken for a direct-URL install and dropped (fixed in v0.1.5 —
+earlier versions checked for `://` before stripping the comment, so
+any dependency with a URL in its comment was silently skipped instead
+of checked). A genuine direct-URL install (`-e https://...` or
+`name @ https://...`) is still correctly skipped either way.
 
 ## Development
 

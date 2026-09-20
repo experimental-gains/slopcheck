@@ -49,6 +49,27 @@ def test_parse_requirements_txt_strips_inline_comments(tmp_path: Path):
     assert names == {"pandas", "pyarrow", "requests", "flask"}
 
 
+def test_parse_requirements_txt_comment_with_url_still_checks_dep(tmp_path: Path):
+    # A dependency whose *explanatory comment* happens to mention a URL
+    # (e.g. linking to its docs) is a normal, common style — it must not be
+    # confused with an actual direct-URL install (`name @ https://...` or
+    # `-e https://...`), which has no registry name to check at all and
+    # should still be skipped.
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "\n".join(
+            [
+                "requests>=2.0  # docs: https://requests.readthedocs.io",
+                "flask==2.3.0  # see http://flask.palletsprojects.com",
+                "-e https://github.com/foo/bar.git",
+                "someurlpkg @ https://example.com/someurlpkg.whl",
+            ]
+        )
+    )
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"requests", "flask"}
+
+
 def test_parse_package_json(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
