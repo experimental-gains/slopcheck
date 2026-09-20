@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.0
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.1
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.0
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.1
     slopcheck
 ```
 
@@ -89,6 +89,14 @@ into CI:
   this (0xToxSec's version already covers similar ground).
 - A "recent" flag is a prompt to look closer, not proof of anything.
   Plenty of brand-new packages are legitimate.
+
+## Monorepo / workspace dependencies
+
+`npm`/`pnpm`/`Yarn` workspace protocols (`workspace:`, `file:`, `link:`,
+`portal:`) and git-based specs (`git:`, `git+...`, `github:user/repo`)
+point somewhere other than the public registry, so slopcheck skips them
+rather than flagging every internal package name in a Turborepo/Nx/Lerna
+monorepo as "not found" (fixed in v0.1.1 — v0.1.0 falsely flagged these).
 
 ## Development
 

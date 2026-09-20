@@ -78,12 +78,24 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
     return deps
 
 
+# Version protocols that point at something other than the public registry
+# (a workspace sibling, a local path, a git remote). Names under these
+# protocols are never expected to resolve on npm even when legitimate —
+# monorepo tooling (pnpm/Yarn/npm workspaces, Turborepo, Nx, Lerna) commonly
+# names internal-only packages this way, so checking them against the
+# registry produces a false "not found" on every workspace monorepo.
+_NON_REGISTRY_PREFIXES = ("workspace:", "file:", "link:", "portal:", "git:", "git+", "github:")
+
+
 def parse_package_json(path: Path) -> list[Dependency]:
     data = json.loads(path.read_text())
-    names = []
+    deps = []
     for section in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
-        names.extend(data.get(section, {}).keys())
-    return [Dependency(name, "npm", str(path)) for name in names]
+        for name, version in data.get(section, {}).items():
+            if isinstance(version, str) and version.startswith(_NON_REGISTRY_PREFIXES):
+                continue
+            deps.append(Dependency(name, "npm", str(path)))
+    return deps
 
 
 PARSERS = {

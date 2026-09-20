@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from slopcheck.parsers import (
@@ -37,6 +38,28 @@ def test_parse_package_json(tmp_path: Path):
     names = {dep.name for dep in parse_package_json(pkg)}
     assert names == {"left-pad", "eslint"}
     assert all(dep.ecosystem == "npm" for dep in parse_package_json(pkg))
+
+
+def test_parse_package_json_skips_non_registry_protocols(tmp_path: Path):
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "@repo/ui": "workspace:*",
+                    "local-lib": "file:../local-lib",
+                    "linked-lib": "link:../linked-lib",
+                    "ported-lib": "portal:../ported-lib",
+                    "from-git": "git+https://example.com/foo.git",
+                    "gh-shorthand": "github:user/repo",
+                    "react": "^19.0.0",
+                },
+                "devDependencies": {"@repo/eslint-config": "workspace:^"},
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"react"}
 
 
 def test_parse_pyproject_pep621(tmp_path: Path):
