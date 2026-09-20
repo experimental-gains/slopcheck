@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.3
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.4
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.3
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.4
     slopcheck
 ```
 
@@ -104,6 +104,17 @@ a package under a local rename or alongside another version of itself)
 local alias key — the alias key is never expected to exist in the
 registry under its own name (fixed in v0.1.2 — earlier versions checked
 the alias key itself and flagged legitimate aliases as "not found").
+
+Poetry's table-form dependencies (`{ git = "..." }`, `{ path = "..." }`,
+`{ url = "..." }`) point at a git remote, a local path, or an arbitrary
+URL instead of PyPI — the same non-registry-source situation as the npm
+protocols above, and just as common for internal/private packages in a
+Poetry monorepo. These are skipped rather than checked against PyPI
+(fixed in v0.1.4 — earlier versions checked the dependency name itself
+and flagged every internal git/path/url dependency as "not found").
+A multiple-constraints list (`foo = [{version = "1.0", python = "<3.11"},
+{version = "2.0", python = ">=3.11"}]`) is still checked as long as at
+least one constraint has a real registry version.
 
 ## requirements.txt inline comments
 

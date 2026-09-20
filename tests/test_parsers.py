@@ -130,3 +130,35 @@ def test_parse_pyproject_poetry(tmp_path: Path):
     )
     names = {dep.name for dep in parse_pyproject_toml(pyproject)}
     assert names == {"requests", "pytest"}
+
+
+def test_parse_pyproject_poetry_skips_non_registry_sources(tmp_path: Path):
+    # Poetry's table form lets a dependency point at a git remote, a local
+    # path, or a URL instead of PyPI (common for internal/private packages
+    # in a monorepo) — checking these names against PyPI produces a false
+    # "not found" exactly like the npm workspace:/file:/git: case above.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [tool.poetry.dependencies]
+        python = "^3.10"
+        requests = "^2.31"
+        internal-git-lib = { git = "https://example.com/internal-git-lib.git" }
+        internal-path-lib = { path = "../internal-path-lib" }
+        internal-url-lib = { url = "https://example.com/internal-url-lib.tar.gz" }
+        multi-constraint = [
+            { version = "^1.0", python = "<3.11" },
+            { version = "^2.0", python = ">=3.11" },
+        ]
+        git-only-multi-constraint = [
+            { git = "https://example.com/a.git", markers = "sys_platform == 'darwin'" },
+            { git = "https://example.com/b.git", markers = "sys_platform == 'linux'" },
+        ]
+
+        [tool.poetry.group.dev.dependencies]
+        pytest = "^8.0"
+        internal-dev-lib = { path = "../internal-dev-lib" }
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "pytest", "multi-constraint"}

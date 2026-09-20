@@ -69,16 +69,39 @@ def _pep621_deps(data: dict) -> list[str]:
     return names
 
 
+def _is_poetry_registry_dep(spec) -> bool:
+    """Whether a Poetry dependency spec resolves against PyPI at all.
+
+    Poetry's table form (https://python-poetry.org/docs/dependency-specification/)
+    lets a dependency point at a git remote, a local path, or an arbitrary
+    URL instead of PyPI — the same non-registry-source situation as npm's
+    workspace:/file:/git: protocols above, and just as common for internal/
+    private packages in a monorepo. A plain version string, or a
+    multiple-constraints list where at least one entry is a real registry
+    version, still belongs on PyPI and should be checked; a table (or a
+    list where every entry) specifying git/path/url does not.
+    """
+    if isinstance(spec, dict):
+        return not any(key in spec for key in ("git", "path", "url"))
+    if isinstance(spec, list):
+        return any(_is_poetry_registry_dep(item) for item in spec)
+    return True
+
+
 def _poetry_deps(data: dict) -> list[str]:
     names = []
     poetry = data.get("tool", {}).get("poetry", {})
     for section in ("dependencies", "dev-dependencies"):
-        for name in poetry.get(section, {}):
+        for name, spec in poetry.get(section, {}).items():
             if name.lower() == "python":
+                continue
+            if not _is_poetry_registry_dep(spec):
                 continue
             names.append(name)
     for group in poetry.get("group", {}).values():
-        for name in group.get("dependencies", {}):
+        for name, spec in group.get("dependencies", {}).items():
+            if not _is_poetry_registry_dep(spec):
+                continue
             names.append(name)
     return names
 
