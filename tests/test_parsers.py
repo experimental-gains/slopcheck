@@ -222,6 +222,24 @@ def test_parse_pyproject_pep621(tmp_path: Path):
     assert names == {"requests", "click", "pytest"}
 
 
+def test_parse_pyproject_pep621_parenthesized_version_specifier(tmp_path: Path):
+    # PEP 508's legacy parenthesized specifier form, e.g. "numpy (>=1.16)" —
+    # carried over from PEP 440/setup.py-style install_requires strings and
+    # still accepted by `packaging`/pip today. Found via oracle-diff fuzzing
+    # against `packaging.requirements.Requirement`: without this, the
+    # dependency was silently dropped instead of checked.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["numpy (>=1.16)", "requests>=2", "click (>=8.0,<9.0); python_version>=\\"3.10\\""]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"numpy", "requests", "click"}
+
+
 def test_parse_pyproject_poetry(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(

@@ -22,8 +22,16 @@ class Dependency(NamedTuple):
     source: str  # file the dependency was found in
 
 
+# PEP 508 still allows the legacy parenthesized form of a version specifier
+# (e.g. "numpy (>=1.16)", carried over from PEP 440/setup.py-style
+# install_requires strings) as an alternative to the bare "numpy>=1.16"
+# form. Without a branch for it, a dependency written that way didn't match
+# at all and was silently dropped instead of checked — a real false
+# negative, not just a cosmetic style difference, since `packaging`
+# (pip's own requirement parser) accepts it.
 _REQ_LINE_RE = re.compile(
-    r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[<>=!~;].*)?$"
+    r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*"
+    r"(?:\([^)]*\)\s*(?:;.*)?|[<>=!~;].*)?$"
 )
 
 # pip treats a `#` as starting a trailing comment as long as it's preceded by

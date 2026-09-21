@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.8
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.9
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.8
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.9
     slopcheck
 ```
 
@@ -135,6 +135,17 @@ and flagged every internal git/path/url dependency as "not found").
 A multiple-constraints list (`foo = [{version = "1.0", python = "<3.11"},
 {version = "2.0", python = ">=3.11"}]`) is still checked as long as at
 least one constraint has a real registry version.
+
+A dependency written with PEP 508's legacy parenthesized version
+specifier (e.g. `numpy (>=1.16)`, carried over from PEP 440/setup.py-style
+`install_requires` strings and still accepted by `packaging`/pip today)
+is now recognized in both `pyproject.toml` and `requirements.txt` (fixed
+in v0.1.9 — earlier versions only matched the bare `numpy>=1.16` form, so
+a dependency written the parenthesized way was silently dropped and
+never checked at all). Found via oracle-diff fuzzing against
+`packaging.requirements.Requirement`, the same technique already used
+across this org's Go tools, applied to a Python parser for the first
+time using Hypothesis instead of Go's native fuzzer.
 
 ## requirements.txt inline comments
 
