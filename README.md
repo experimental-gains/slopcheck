@@ -77,6 +77,20 @@ into CI:
     slopcheck
 ```
 
+## Use with pre-commit
+
+```yaml
+repos:
+  - repo: https://github.com/experimental-gains/slopcheck
+    rev: v0.1.10
+    hooks:
+      - id: slopcheck
+```
+
+Runs on any commit that touches `requirements.txt`, `pyproject.toml`,
+or `package.json`. `pre-commit` installs it into an isolated Python
+environment the first time (needs Python 3.10+, no other setup).
+
 ## What it checks
 
 | File | Ecosystem |

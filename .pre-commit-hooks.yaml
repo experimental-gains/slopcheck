@@ -1,0 +1,7 @@
+- id: slopcheck
+  name: slopcheck (hallucinated dependency check)
+  description: Flags requirements.txt/pyproject.toml/package.json entries that don't resolve to a real, established package.
+  entry: slopcheck
+  language: python
+  files: (^|/)(requirements.*\.txt|pyproject\.toml|package\.json)$
+  pass_filenames: true
