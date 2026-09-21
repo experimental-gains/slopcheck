@@ -47,6 +47,42 @@ def test_main_errors_when_no_manifests_found(tmp_path: Path):
     assert cli.main([str(tmp_path)]) == 2
 
 
+def test_private_pypi_index_downgrades_not_found_to_private(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PIP_EXTRA_INDEX_URL", "https://pypi.internal.example/simple")
+    (tmp_path / "requirements.txt").write_text("acmecorp-internal-widget\n")
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        exit_code = cli.main([str(tmp_path)])
+
+    assert exit_code == 0  # "private" doesn't fail the default --fail-on=not_found gate
+    out = capsys.readouterr().out
+    assert "PRIVATE" in out
+    assert "acmecorp-internal-widget" in out
+
+
+def test_npm_scoped_registry_only_exempts_that_scope(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    (tmp_path / ".npmrc").write_text("@acmecorp:registry=https://npm.internal.example/\n")
+    (tmp_path / "package.json").write_text(
+        '{"dependencies": {"@acmecorp/widget": "^1.0.0", "totally-made-up-pkg-9000": "^1.0.0"}}'
+    )
+
+    def fake_npm(name: str):
+        return LookupResult("not_found", "no such package")
+
+    with patch.dict(cli.CHECKERS, {"npm": fake_npm}):
+        exit_code = cli.main([str(tmp_path)])
+
+    assert exit_code == 1  # the unrelated hallucinated dep still fails the build
+    results = {dep.name: result.status for dep, result in cli.scan(cli.find_manifests(tmp_path))}
+    assert results["@acmecorp/widget"] == "private"
+    assert results["totally-made-up-pkg-9000"] == "not_found"
+
+
 def test_json_output_is_valid(tmp_path: Path, capsys):
     (tmp_path / "requirements.txt").write_text("requests\n")
     with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"requests"})}):

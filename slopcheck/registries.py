@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
-Status = Literal["ok", "not_found", "recent", "error"]
+Status = Literal["ok", "not_found", "recent", "error", "private"]
 
 _TIMEOUT = 10
 _RECENT_DAYS = 30

@@ -19,6 +19,11 @@ against the real registry (PyPI or npm), and flags:
   days. Not necessarily bad, but a same-day match between "the exact
   name my AI assistant suggested" and "a package that didn't exist
   last month" is worth a second look.
+- **private** — not found on the public registry, but a private/extra
+  index is configured for this project, so it may well exist there.
+  slopcheck can't reach an arbitrary private registry to confirm it,
+  so it reports this as unverified rather than as a hallucination.
+  Doesn't fail CI under the default `--fail-on not_found` gate.
 
 A small experiment measuring where this actually happens — 88
 LLM-generated dependency names checked against the real registries —
@@ -43,7 +48,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.9
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.10
 ```
 
 ## Usage
@@ -68,7 +73,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.9
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.10
     slopcheck
 ```
 
@@ -146,6 +151,25 @@ never checked at all). Found via oracle-diff fuzzing against
 `packaging.requirements.Requirement`, the same technique already used
 across this org's Go tools, applied to a Python parser for the first
 time using Hypothesis instead of Go's native fuzzer.
+
+## Private/internal registries
+
+A dependency that isn't on the public registry but resolves fine for a
+real `pip install`/`npm install` because the project configures a
+private/extra index (an internal PyPI mirror via `--extra-index-url`
+in `requirements.txt`, `PIP_EXTRA_INDEX_URL`/`PIP_INDEX_URL`, or
+`pip.conf`; an internal npm registry scoped to an org via `.npmrc`'s
+`@scope:registry=...`, or a blanket `registry=...` override) is now
+reported as **private** rather than **not found** (fixed in v0.1.10 —
+earlier versions had no notion of a configured private index at all
+and flagged every such dependency as a hallucination, which in
+practice meant every company with an internal package would get this
+false alarm on every private dependency, every CI run). Confirmed live
+against real `pip install`/`npm install` resolving a throwaway package
+from a local index/registry that doesn't exist on the public one. An
+npm scope mapping only exempts packages under that scope — an
+unrelated hallucinated dependency in the same `package.json` is still
+flagged and still fails CI.
 
 ## requirements.txt inline comments
 

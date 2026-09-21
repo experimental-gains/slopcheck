@@ -7,14 +7,29 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .parsers import Dependency, find_manifests, parse_manifest
+from .private_registry import npm_private_registry_context, npm_scope, pip_private_index_configured
 from .registries import CHECKERS, LookupResult
 
-_SEVERITY_ORDER = {"not_found": 0, "recent": 1, "error": 2, "ok": 3}
+_SEVERITY_ORDER = {"not_found": 0, "recent": 1, "error": 2, "private": 3, "ok": 4}
+
+_UNVERIFIED_DETAIL = "not on the public registry, but a private/extra index is configured — not verified"
 
 
 def _check_one(dep: Dependency) -> tuple[Dependency, LookupResult]:
     checker = CHECKERS[dep.ecosystem]
     return dep, checker(dep.name)
+
+
+def _downgrade_if_private(
+    dep: Dependency, result: LookupResult, pip_private: bool, npm_blanket: bool, npm_scopes: set[str]
+) -> LookupResult:
+    if result.status != "not_found":
+        return result
+    if dep.ecosystem == "pypi" and pip_private:
+        return LookupResult("private", _UNVERIFIED_DETAIL)
+    if dep.ecosystem == "npm" and (npm_blanket or npm_scope(dep.name) in npm_scopes):
+        return LookupResult("private", _UNVERIFIED_DETAIL)
+    return result
 
 
 def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, LookupResult]]:
@@ -32,8 +47,14 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     results: list[tuple[Dependency, LookupResult]] = []
     if not unique_deps:
         return results
+
+    pip_private = pip_private_index_configured([p for p in paths if p.name == "requirements.txt"])
+    npm_project_roots = [p.parent for p in paths if p.name == "package.json"]
+    npm_blanket, npm_scopes = npm_private_registry_context(npm_project_roots)
+
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for dep, result in pool.map(_check_one, unique_deps):
+            result = _downgrade_if_private(dep, result, pip_private, npm_blanket, npm_scopes)
             results.append((dep, result))
 
     results.sort(key=lambda pair: _SEVERITY_ORDER[pair[1].status])
@@ -45,6 +66,7 @@ def _print_report(results: list[tuple[Dependency, LookupResult]]) -> None:
         "not_found": "\033[31mNOT FOUND\033[0m",
         "recent": "\033[33mRECENT   \033[0m",
         "error": "\033[33mERROR    \033[0m",
+        "private": "\033[36mPRIVATE  \033[0m",
         "ok": "\033[32mok       \033[0m",
     }
     for dep, result in results:
