@@ -47,6 +47,42 @@ def test_main_errors_when_no_manifests_found(tmp_path: Path):
     assert cli.main([str(tmp_path)]) == 2
 
 
+def test_main_errors_cleanly_on_malformed_package_json(tmp_path: Path, capsys):
+    # Regression test for run #109: a corrupt/truncated package.json used to
+    # raise an unhandled json.JSONDecodeError all the way out of main(),
+    # printing a Python traceback instead of a clean slopcheck error.
+    (tmp_path / "package.json").write_text("this is not json at all {{{")
+
+    exit_code = cli.main([str(tmp_path)])
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "package.json" in err
+    assert "Traceback" not in err
+
+
+def test_main_errors_cleanly_on_malformed_pyproject_toml(tmp_path: Path, capsys):
+    (tmp_path / "pyproject.toml").write_text("[project\nname = \"broken\"\n")
+
+    exit_code = cli.main([str(tmp_path)])
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "pyproject.toml" in err
+    assert "Traceback" not in err
+
+
+def test_main_errors_cleanly_on_invalid_utf8_requirements_txt(tmp_path: Path, capsys):
+    (tmp_path / "requirements.txt").write_bytes(b"requests==2.31.0\n\xff\xfe\x00\x81\nnumpy==1.26.0\n")
+
+    exit_code = cli.main([str(tmp_path)])
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "requirements.txt" in err
+    assert "Traceback" not in err
+
+
 def test_private_pypi_index_downgrades_not_found_to_private(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.delenv("PIP_INDEX_URL", raising=False)
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)

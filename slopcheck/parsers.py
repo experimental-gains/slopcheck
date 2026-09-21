@@ -16,6 +16,18 @@ except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[no-redef]
 
 
+class ManifestParseError(Exception):
+    """Raised when a manifest file can't be parsed as its expected format.
+
+    Covers the file-is-corrupt/truncated/wrong-encoding case (invalid JSON,
+    invalid TOML, invalid UTF-8) as opposed to a missing or unreadable file,
+    which is checked earlier in cli.main. Wrapping the parser-specific
+    exceptions here gives callers one exception type to catch and a message
+    that names the offending file, instead of an unhandled traceback from
+    deep inside json/tomllib.
+    """
+
+
 class Dependency(NamedTuple):
     name: str
     ecosystem: str  # "pypi" or "npm"
@@ -251,4 +263,7 @@ def find_manifests(root: Path) -> list[Path]:
 
 def parse_manifest(path: Path) -> list[Dependency]:
     parser = PARSERS[path.name]
-    return parser(path)
+    try:
+        return parser(path)
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        raise ManifestParseError(f"{path}: couldn't parse as {path.name} ({e})") from e

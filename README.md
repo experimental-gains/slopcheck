@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.10
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.11
 ```
 
 ## Usage
@@ -97,7 +97,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.10
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.11
     slopcheck
 ```
 
@@ -106,7 +106,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.10
+    rev: v0.1.11
     hooks:
       - id: slopcheck
 ```

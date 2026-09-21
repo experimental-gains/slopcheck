@@ -6,7 +6,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .parsers import Dependency, find_manifests, parse_manifest
+from .parsers import Dependency, ManifestParseError, find_manifests, parse_manifest
 from .private_registry import npm_private_registry_context, npm_scope, pip_private_index_configured
 from .registries import CHECKERS, LookupResult
 
@@ -116,7 +116,11 @@ def main(argv: list[str] | None = None) -> int:
         print("slopcheck: no requirements.txt, pyproject.toml, or package.json found", file=sys.stderr)
         return 2
 
-    results = scan(manifests)
+    try:
+        results = scan(manifests)
+    except ManifestParseError as e:
+        print(f"slopcheck: {e}", file=sys.stderr)
+        return 2
 
     if args.json:
         payload = [
