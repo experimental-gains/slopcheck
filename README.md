@@ -43,7 +43,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.7
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.8
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.7
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.8
     slopcheck
 ```
 
@@ -117,6 +117,13 @@ package (e.g. `"kerberos@2.1.1": { "node-addon-api": "7.1.0" }`) — the
 suffix is stripped before checking, so this resolves to `kerberos`, not
 the literal string `kerberos@2.1.1` (fixed in v0.1.7 — earlier versions
 checked the version-and-all string and always flagged it "not found").
+A `resolutions` pattern's own key can carry the same kind of suffix
+directly on the target package, with no `/` path at all (e.g.
+`"lru-cache@^10.0.1"`, or `"@types/mdx@npm:^2.0.0"` for a scoped
+package) — real syntax from jest's `package.json`, and stripped the
+same way (fixed in v0.1.8 — earlier versions checked the pattern's
+range/protocol suffix as part of the package name and always flagged
+it "not found").
 
 Poetry's table-form dependencies (`{ git = "..." }`, `{ path = "..." }`,
 `{ url = "..." }`) point at a git remote, a local path, or an arbitrary

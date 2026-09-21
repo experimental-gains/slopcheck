@@ -144,18 +144,21 @@ def _npm_alias_target(spec: str) -> str:
     return rest[:at] if at != -1 else rest
 
 
-def _override_key_name(key: str) -> str:
-    """Strip npm's optional `@version` scope suffix from an overrides key.
+def _strip_version_suffix(name: str) -> str:
+    """Strip an optional trailing `@version`/`@range`/`@protocol` suffix.
 
-    `"foo@1.0.0": {"bar": "1.0.0"}` scopes the override to only apply
-    when the resolved `foo` is exactly that version — real npm syntax
-    (e.g. vscode's `package.json` uses `"kerberos@2.1.1"` to override
-    `node-addon-api` only for that specific `kerberos` version). Without
-    stripping it, the version-and-all string gets checked against the
-    registry as if it were the package name and never matches.
+    `"foo@1.0.0"` pins `foo` to that version — real npm overrides-key
+    syntax (e.g. vscode's `package.json` uses `"kerberos@2.1.1"` to
+    override `node-addon-api` only for that specific `kerberos`
+    version) and also real Yarn `resolutions`-key syntax (e.g. jest's
+    `package.json` uses `"lru-cache@^10.0.1"` and `"@types/mdx@npm:
+    ^2.0.0"` to pin a patched resolution). Without stripping it, the
+    version-and-all string gets checked against the registry as if it
+    were the package name and never matches — even though the package
+    itself is real and published.
     """
-    at = key.find("@", 1) if key.startswith("@") else key.find("@")
-    return key[:at] if at != -1 else key
+    at = name.find("@", 1) if name.startswith("@") else name.find("@")
+    return name[:at] if at != -1 else name
 
 
 def _npm_overrides_deps(overrides: dict) -> list[str]:
@@ -178,7 +181,7 @@ def _npm_overrides_deps(overrides: dict) -> list[str]:
         if isinstance(value, str) and value.startswith(_NPM_ALIAS_PREFIX):
             names.append(_npm_alias_target(value))
         else:
-            names.append(_override_key_name(name))
+            names.append(_strip_version_suffix(name))
         if isinstance(value, dict):
             names.extend(_npm_overrides_deps(value))
     return names
@@ -191,14 +194,18 @@ def _yarn_resolution_target(pattern: str) -> str:
     `webpack/**/ws` or `**/lodash`), optionally with `**` wildcard
     segments; the package actually being pinned is the last real segment.
     Scoped packages (`@babel/core`) contain their own `/`, so a trailing
-    `@scope` segment is rejoined with the name segment after it.
+    `@scope` segment is rejoined with the name segment after it. Yarn
+    also allows a range/protocol pinned directly onto that last segment
+    (`"lru-cache@^10.0.1"`, `"@types/mdx@npm:^2.0.0"` — both real, from
+    jest's `package.json`), which needs the same suffix-stripping as an
+    npm overrides key or it never matches the registry.
     """
     segments = [s for s in pattern.split("/") if s and s != "**"]
     if not segments:
         return pattern
     if len(segments) >= 2 and segments[-2].startswith("@"):
-        return f"{segments[-2]}/{segments[-1]}"
-    return segments[-1]
+        return _strip_version_suffix(f"{segments[-2]}/{segments[-1]}")
+    return _strip_version_suffix(segments[-1])
 
 
 def parse_package_json(path: Path) -> list[Dependency]:

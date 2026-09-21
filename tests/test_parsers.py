@@ -184,6 +184,28 @@ def test_parse_package_json_reads_yarn_resolutions(tmp_path: Path):
     assert names == {"express", "graceful-fs", "lodash", "ws", "@babel/core"}
 
 
+def test_parse_package_json_strips_range_from_yarn_resolution_key(tmp_path: Path):
+    # Real patterns from jest's package.json: a resolutions key can pin a
+    # range/protocol directly onto the package name with no "/" path at
+    # all, or onto the name half of a scoped "@scope/name" pattern. Both
+    # forms need the "@range" suffix stripped or the raw pattern (which
+    # is never a real package name) gets checked against the registry
+    # instead of the package it actually pins.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "resolutions": {
+                    "lru-cache@^10.0.1": "patch:lru-cache@npm:10.4.3#./.yarn/patches/lru-cache.patch",
+                    "@types/mdx@npm:^2.0.0": "patch:@types/mdx@npm:^2.0.0#~/.yarn/patches/types-mdx.patch",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"lru-cache", "@types/mdx"}
+
+
 def test_parse_pyproject_pep621(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
