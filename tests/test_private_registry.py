@@ -53,6 +53,29 @@ def test_pip_private_index_from_pip_conf(tmp_path: Path, monkeypatch):
     assert pip_private_index_configured([reqs]) is True
 
 
+def test_pip_private_index_from_virtualenv_pip_conf(tmp_path: Path, monkeypatch):
+    # pip reads $VIRTUAL_ENV/pip.conf when running inside an active venv, in
+    # addition to the user/system locations — verified live against pip's
+    # own docs and behavior. A mutation-testing pass (mutmut, run #126)
+    # found every existing test explicitly unset VIRTUAL_ENV to isolate from
+    # the real dev environment, but none of them set it to confirm this
+    # venv-local config location is actually read.
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    venv_dir = tmp_path / "venv"
+    venv_dir.mkdir()
+    pip_conf = venv_dir / "pip.conf"
+    pip_conf.write_text("[global]\nextra-index-url = https://pypi.internal.example/simple\n")
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv_dir))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("requests>=2.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
 def test_npm_no_private_registry_by_default(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("npm_config_registry", raising=False)
     monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
