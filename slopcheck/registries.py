@@ -34,7 +34,12 @@ class LookupResult:
 def _get_json(url: str) -> dict | None:
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+        # bandit flags urlopen for arbitrary schemes (B310), but both call
+        # sites below build url from a fixed https:// literal plus a name
+        # already constrained to a safe character set (parsers._REQ_LINE_RE
+        # for PyPI, urllib.parse.quote for npm) — the scheme/host can't be
+        # attacker-influenced.
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:  # nosec B310
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
