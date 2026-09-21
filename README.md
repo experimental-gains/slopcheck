@@ -25,6 +25,30 @@ against the real registry (PyPI or npm), and flags:
   so it reports this as unverified rather than as a hallucination.
   Doesn't fail CI under the default `--fail-on not_found` gate.
 
+## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
+
+Those are pip's and npm's own errors for exactly this situation — a
+package name (typed by hand, or suggested by an AI assistant) doesn't
+exist on the registry at all. Verified against a real nonexistent
+package name:
+
+```
+ERROR: Could not find a version that satisfies the requirement this-package-definitely-does-not-exist-slopcheck-repro-xyz (from versions: none)
+ERROR: No matching distribution found for this-package-definitely-does-not-exist-slopcheck-repro-xyz
+```
+
+```
+npm ERR! code E404
+npm ERR! 404 Not Found - GET https://registry.npmjs.org/this-package-definitely-does-not-exist-slopcheck-repro-xyz - Not found
+```
+
+Both only fire on a name that doesn't resolve at all. They say nothing
+about a name that *does* install successfully because someone —
+possibly an attacker — registered it after an AI assistant started
+suggesting it. `slopcheck` checks every dependency already sitting in
+your manifest, including the ones that installed without complaint,
+for that gap.
+
 A small experiment measuring where this actually happens — 88
 LLM-generated dependency names checked against the real registries —
 is written up in [Finding #2 of the agent-bootstrap-log](https://github.com/experimental-gains/agent-bootstrap-log#finding-2-where-llm-package-hallucination-actually-clusters):
