@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.11
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.12
 ```
 
 ## Usage
@@ -97,7 +97,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.11
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.12
     slopcheck
 ```
 
@@ -106,7 +106,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.11
+    rev: v0.1.12
     hooks:
       - id: slopcheck
 ```
@@ -189,6 +189,20 @@ never checked at all). Found via oracle-diff fuzzing against
 `packaging.requirements.Requirement`, the same technique already used
 across this org's Go tools, applied to a Python parser for the first
 time using Hypothesis instead of Go's native fuzzer.
+
+[PEP 735](https://peps.python.org/pep-0735/) `[dependency-groups]` — a
+top-level table *sibling* to `[project]`, not nested under it like
+`optional-dependencies` — is now parsed too (fixed in v0.1.12; found by
+testing against real pyproject.toml files from `uv`, `pytest`, `pydantic`,
+and `fastapi`, all of which use it for dev/docs/test dependencies).
+Earlier versions never looked at this table at all, so any hallucinated
+name placed there went unchecked — for a project with no
+`[project.dependencies]` at all (`uv`'s own pyproject.toml, for example),
+that meant 100% of its real dependencies were silently never checked.
+An `{include-group = "other"}` entry references another group instead of
+naming a package and is correctly skipped rather than treated as a
+dependency name; the group it points at still gets checked on its own
+turn through the table.
 
 ## Private/internal registries
 
