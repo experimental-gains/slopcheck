@@ -369,3 +369,34 @@ def test_parse_pyproject_poetry_group_without_dependencies_key(tmp_path: Path):
     )
     names = {dep.name for dep in parse_pyproject_toml(pyproject)}
     assert names == {"requests"}
+
+
+def test_parse_pyproject_dependency_groups(tmp_path: Path):
+    # PEP 735 `[dependency-groups]` — a top-level table *sibling* to
+    # [project], not nested under it — found via real-world testing against
+    # uv's/pytest's/pydantic's/fastapi's actual pyproject.toml files, all of
+    # which use it for dev/docs/test dependencies that this parser was
+    # silently never checking at all (uv's own file has zero
+    # [project.dependencies], so 100% of its real deps live only here).
+    # Entries can be a plain requirement spec (with extras/markers, same as
+    # optional-dependencies) or an {include-group = "..."} table referencing
+    # another group instead of naming a package — that reference must be
+    # skipped, not mistaken for a dependency name, while the group it points
+    # at still gets picked up on its own turn through the table.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests>=2"]
+
+        [dependency-groups]
+        test = ["pytest", 'time-machine; platform_python_implementation != "PyPy"']
+        docs = [
+            { include-group = "test" },
+            "mkdocs>=1.5.0",
+        ]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "pytest", "time-machine", "mkdocs"}

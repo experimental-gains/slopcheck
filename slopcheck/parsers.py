@@ -126,9 +126,35 @@ def _poetry_deps(data: dict) -> list[str]:
     return names
 
 
+def _dependency_groups_deps(data: dict) -> list[str]:
+    """Flatten PEP 735 `[dependency-groups]` entries into requirement specs.
+
+    `[dependency-groups]` (accepted 2024, supported by pip 24.3+, uv, hatch,
+    PDM) is a top-level table *sibling* to `[project]`, not nested under it
+    like `optional-dependencies` — real, current pyproject.toml files (uv's
+    own, pytest's, pydantic's, fastapi's) all use it for dev/docs/test
+    dependencies, and `_pep621_deps` never looked at it, so every name in
+    it was silently never checked at all (not just mis-parsed — `uv`'s own
+    pyproject.toml has zero `[project.dependencies]`, so its real dev/docs
+    deps were 100% unchecked). Each group is a list of either a plain PEP
+    508 requirement string, or an `{include-group = "other"}` table
+    referencing another group's dependencies instead of naming a package
+    itself. That reference doesn't need to be resolved/followed here: this
+    function iterates every group in the table directly, so the group it
+    points at contributes its own entries on its own turn through the loop
+    — the reference is just skipped as it isn't a requirement spec.
+    """
+    names = []
+    for group in data.get("dependency-groups", {}).values():
+        for item in group:
+            if isinstance(item, str):
+                names.append(item)
+    return names
+
+
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
     data = tomllib.loads(path.read_text())
-    raw_specs = _pep621_deps(data) + _poetry_deps(data)
+    raw_specs = _pep621_deps(data) + _poetry_deps(data) + _dependency_groups_deps(data)
     deps = []
     for spec in raw_specs:
         match = _REQ_LINE_RE.match(spec.strip())
