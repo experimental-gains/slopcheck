@@ -41,6 +41,36 @@ def test_pip_private_index_from_requirements_txt_directive(tmp_path: Path, monke
     assert pip_private_index_configured([reqs]) is True
 
 
+def test_pip_private_index_from_requirements_txt_short_flag(tmp_path: Path, monkeypatch):
+    """pip's `-i` is the registered short alias for `--index-url` (confirmed
+    against pip's own `cmdoptions.index_url` short_opts and by parsing this
+    exact line with pip's real `parse_requirements()`); a common real-world
+    way to point requirements.txt at an internal artifact registry."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("-i https://pypi.internal.example/simple\nrequests>=2.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
+def test_pip_private_index_from_requirements_txt_short_flag_attached(tmp_path: Path, monkeypatch):
+    """pip also accepts the short flag with no space before its value
+    (optparse short-option attachment, e.g. `-ihttps://...`)."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("-ihttps://pypi.internal.example/simple\nrequests>=2.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
 def test_pip_private_index_from_pip_conf(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("PIP_INDEX_URL", raising=False)
     monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)

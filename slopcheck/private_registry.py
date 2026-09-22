@@ -22,7 +22,7 @@ import os
 import re
 from pathlib import Path
 
-_PIP_DIRECTIVE_RE = re.compile(r"^--(index-url|extra-index-url)\b")
+_PIP_DIRECTIVE_RE = re.compile(r"^(?:-i|--(?:index-url|extra-index-url|pypi-url)\b)")
 
 
 def _pip_config_paths() -> list[Path]:
