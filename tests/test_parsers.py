@@ -261,6 +261,9 @@ def test_parse_pyproject_poetry_skips_non_registry_sources(tmp_path: Path):
     # path, or a URL instead of PyPI (common for internal/private packages
     # in a monorepo) — checking these names against PyPI produces a false
     # "not found" exactly like the npm workspace:/file:/git: case above.
+    # The dev group lists the non-registry dep *first* so a skip that fails
+    # to keep iterating (break instead of continue) would silently drop the
+    # registry dep that follows it, not just the skip itself.
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
         """
@@ -280,9 +283,47 @@ def test_parse_pyproject_poetry_skips_non_registry_sources(tmp_path: Path):
         ]
 
         [tool.poetry.group.dev.dependencies]
-        pytest = "^8.0"
         internal-dev-lib = { path = "../internal-dev-lib" }
+        pytest = "^8.0"
         """
     )
     names = {dep.name for dep in parse_pyproject_toml(pyproject)}
     assert names == {"requests", "pytest", "multi-constraint"}
+
+
+def test_parse_pyproject_poetry_legacy_dev_dependencies(tmp_path: Path):
+    # Pre-1.2 Poetry used [tool.poetry.dev-dependencies] instead of a
+    # [tool.poetry.group.*.dependencies] table; both forms are still seen
+    # in the wild and both need to be checked.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [tool.poetry.dependencies]
+        python = "^3.10"
+        requests = "^2.31"
+
+        [tool.poetry.dev-dependencies]
+        pytest = "^8.0"
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "pytest"}
+
+
+def test_parse_pyproject_poetry_group_without_dependencies_key(tmp_path: Path):
+    # A group table that doesn't declare a [tool.poetry.group.X.dependencies]
+    # sub-table at all (e.g. a group reserved for other config) must not
+    # crash the parser.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [tool.poetry.dependencies]
+        python = "^3.10"
+        requests = "^2.31"
+
+        [tool.poetry.group.docs]
+        optional = true
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests"}
