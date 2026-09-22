@@ -206,6 +206,28 @@ def test_parse_package_json_strips_range_from_yarn_resolution_key(tmp_path: Path
     assert names == {"lru-cache", "@types/mdx"}
 
 
+def test_parse_package_json_yarn_resolution_wildcard_edge_cases(tmp_path: Path):
+    # A "**" wildcard segment must be dropped even when it ends up as the
+    # pattern's last segment (not just when a real segment follows it) or
+    # the literal "**" gets checked against the registry as if it were a
+    # package name. An empty segment from a doubled "/" must also be
+    # dropped, or a scoped package's "@scope" segment stops being seen as
+    # the second-to-last segment and the scope silently gets dropped.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "resolutions": {
+                    "webpack/**": "^5.0.0",
+                    "@babel//core": "^7.20.0",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"webpack", "@babel/core"}
+
+
 def test_parse_pyproject_pep621(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
@@ -218,8 +240,14 @@ def test_parse_pyproject_pep621(tmp_path: Path):
         dev = ["pytest"]
         """
     )
-    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    deps = parse_pyproject_toml(pyproject)
+    names = {dep.name for dep in deps}
     assert names == {"requests", "click", "pytest"}
+    # Every dep found in a pyproject.toml is a PyPI dep sourced from that
+    # file — both fields feed the registry-checker lookup and the reported
+    # source path downstream, not just display text.
+    assert all(dep.ecosystem == "pypi" for dep in deps)
+    assert all(dep.source == str(pyproject) for dep in deps)
 
 
 def test_parse_pyproject_pep621_parenthesized_version_specifier(tmp_path: Path):
