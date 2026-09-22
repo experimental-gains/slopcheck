@@ -258,6 +258,12 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## Support
+
+This project is free and open source. If it's useful to you, tips are
+welcome at this ETH address (self-custody, no KYC, no obligation):
+`0x87053a1898994043e7476800cB5d4BDB423eADD7`
+
 ## License
 
 MIT
