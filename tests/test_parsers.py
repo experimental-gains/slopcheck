@@ -73,12 +73,20 @@ def test_parse_requirements_txt_comment_with_url_still_checks_dep(tmp_path: Path
 def test_parse_package_json(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
-        '{"dependencies": {"left-pad": "^1.0.0"}, '
-        '"devDependencies": {"eslint": "^9.0.0"}}'
+        json.dumps(
+            {
+                "dependencies": {"left-pad": "^1.0.0"},
+                "devDependencies": {"eslint": "^9.0.0"},
+                "peerDependencies": {"react": "^19.0.0"},
+                "optionalDependencies": {"fsevents": "^2.3.0"},
+            }
+        )
     )
-    names = {dep.name for dep in parse_package_json(pkg)}
-    assert names == {"left-pad", "eslint"}
-    assert all(dep.ecosystem == "npm" for dep in parse_package_json(pkg))
+    deps = parse_package_json(pkg)
+    names = {dep.name for dep in deps}
+    assert names == {"left-pad", "eslint", "react", "fsevents"}
+    assert all(dep.ecosystem == "npm" for dep in deps)
+    assert all(dep.source == str(pkg) for dep in deps)
 
 
 def test_parse_package_json_skips_non_registry_protocols(tmp_path: Path):
@@ -138,8 +146,11 @@ def test_parse_package_json_reads_npm_overrides(tmp_path: Path):
             }
         )
     )
-    names = {dep.name for dep in parse_package_json(pkg)}
+    deps = parse_package_json(pkg)
+    names = {dep.name for dep in deps}
     assert names == {"express", "semver", "foo", "bar", "real-target"}
+    assert all(dep.ecosystem == "npm" for dep in deps)
+    assert all(dep.source == str(pkg) for dep in deps)
 
 
 def test_parse_package_json_reads_npm_overrides_with_version_scoped_key(tmp_path: Path):
@@ -180,8 +191,11 @@ def test_parse_package_json_reads_yarn_resolutions(tmp_path: Path):
             }
         )
     )
-    names = {dep.name for dep in parse_package_json(pkg)}
+    deps = parse_package_json(pkg)
+    names = {dep.name for dep in deps}
     assert names == {"express", "graceful-fs", "lodash", "ws", "@babel/core"}
+    assert all(dep.ecosystem == "npm" for dep in deps)
+    assert all(dep.source == str(pkg) for dep in deps)
 
 
 def test_parse_package_json_strips_range_from_yarn_resolution_key(tmp_path: Path):
