@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.12
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.13
 ```
 
 ## Usage
@@ -97,7 +97,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.12
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.13
     slopcheck
 ```
 
@@ -106,7 +106,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.12
+    rev: v0.1.13
     hooks:
       - id: slopcheck
 ```
@@ -208,19 +208,27 @@ turn through the table.
 
 A dependency that isn't on the public registry but resolves fine for a
 real `pip install`/`npm install` because the project configures a
-private/extra index (an internal PyPI mirror via `--extra-index-url`
-in `requirements.txt`, `PIP_EXTRA_INDEX_URL`/`PIP_INDEX_URL`, or
-`pip.conf`; an internal npm registry scoped to an org via `.npmrc`'s
-`@scope:registry=...`, or a blanket `registry=...` override) is now
-reported as **private** rather than **not found** (fixed in v0.1.10 —
-earlier versions had no notion of a configured private index at all
-and flagged every such dependency as a hallucination, which in
-practice meant every company with an internal package would get this
-false alarm on every private dependency, every CI run). Confirmed live
-against real `pip install`/`npm install` resolving a throwaway package
-from a local index/registry that doesn't exist on the public one. An
-npm scope mapping only exempts packages under that scope — an
-unrelated hallucinated dependency in the same `package.json` is still
+private/extra index (an internal PyPI mirror via `--extra-index-url`,
+`--index-url`, or pip's short `-i` alias in `requirements.txt`,
+`PIP_EXTRA_INDEX_URL`/`PIP_INDEX_URL`, or `pip.conf`; an internal npm
+registry scoped to an org via `.npmrc`'s `@scope:registry=...`, or a
+blanket `registry=...` override) is now reported as **private** rather
+than **not found** (fixed in v0.1.10 — earlier versions had no notion
+of a configured private index at all and flagged every such dependency
+as a hallucination, which in practice meant every company with an
+internal package would get this false alarm on every private
+dependency, every CI run). Confirmed live against real `pip
+install`/`npm install` resolving a throwaway package from a local
+index/registry that doesn't exist on the public one. `-i` support was
+added separately in v0.1.13: it's pip's own registered short option
+for `--index-url` (confirmed by parsing a real `requirements.txt` with
+pip's actual `parse_requirements()`), but v0.1.10 only recognized the
+long-form flags, so a `requirements.txt` pointing at an internal
+registry with `-i <url>` — common with Artifactory/Nexus/CodeArtifact-
+style internal indexes — still got every private dependency flagged as
+a hallucination until this fix. An npm scope mapping only exempts
+packages under that scope — an unrelated hallucinated dependency in
+the same `package.json` is still
 flagged and still fails CI.
 
 ## requirements.txt inline comments
