@@ -266,6 +266,19 @@ def parse_package_json(path: Path) -> list[Dependency]:
             deps.append(Dependency(name, "npm", str(path)))
     for name in _npm_overrides_deps(data.get("overrides", {})):
         deps.append(Dependency(name, "npm", str(path)))
+    # pnpm has its own overrides field, nested under a top-level "pnpm" key
+    # (`"pnpm": {"overrides": {...}}`) rather than npm's root-level
+    # "overrides" — real, current usage: prisma/prisma's package.json uses
+    # exactly this form (`pnpm.overrides`, six entries including
+    # version-scoped keys like "minimatch@3.1.2"), and pnpm supports npm's
+    # root-level "overrides" too, so the two fields are additive, not
+    # either/or — a manifest can use both. Same value shape as npm's
+    # overrides (a version string, an npm: alias, or a nested object), so
+    # _npm_overrides_deps handles it unchanged.
+    pnpm_overrides = data.get("pnpm", {})
+    if isinstance(pnpm_overrides, dict):
+        for name in _npm_overrides_deps(pnpm_overrides.get("overrides", {})):
+            deps.append(Dependency(name, "npm", str(path)))
     for pattern in data.get("resolutions", {}):
         deps.append(Dependency(_yarn_resolution_target(pattern), "npm", str(path)))
     return deps

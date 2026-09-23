@@ -176,6 +176,63 @@ def test_parse_package_json_reads_npm_overrides_with_version_scoped_key(tmp_path
     assert names == {"kerberos", "node-addon-api", "@babel/core"}
 
 
+def test_parse_package_json_reads_pnpm_overrides(tmp_path: Path):
+    # Real data from prisma/prisma's package.json: pnpm has its own
+    # overrides field nested under a top-level "pnpm" key rather than
+    # npm's root-level "overrides" — a manifest can have neither, either,
+    # or both, so this must be read in addition to (not instead of) the
+    # root-level field. Also exercises the same version-scoped-key form
+    # ("minimatch@3.1.2") as npm's overrides, confirming the existing
+    # suffix-stripping logic is reused correctly here too.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "devDependencies": {"typescript": "^5.0.0"},
+                "pnpm": {
+                    "overrides": {
+                        "hono": "4.11.4",
+                        "js-yaml": "3.14.2",
+                        "lodash": "4.17.23",
+                        "minimatch@3.1.2": "3.1.3",
+                        "minimatch@9.0.5": "9.0.7",
+                        "rollup": "4.59.0",
+                    }
+                },
+            }
+        )
+    )
+    deps = parse_package_json(pkg)
+    names = {dep.name for dep in deps}
+    assert names == {
+        "typescript",
+        "hono",
+        "js-yaml",
+        "lodash",
+        "minimatch",
+        "rollup",
+    }
+    assert all(dep.ecosystem == "npm" for dep in deps)
+    assert all(dep.source == str(pkg) for dep in deps)
+
+
+def test_parse_package_json_pnpm_key_without_overrides_is_ignored(tmp_path: Path):
+    # pnpm's "pnpm" key can hold other config (patchedDependencies,
+    # packageExtensions, etc.) with no "overrides" sub-key at all — must
+    # not error or silently invent dependencies from unrelated pnpm config.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {"express": "^4.19.2"},
+                "pnpm": {"patchedDependencies": {"foo@1.0.0": "patches/foo.patch"}},
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"express"}
+
+
 def test_parse_package_json_reads_yarn_resolutions(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
