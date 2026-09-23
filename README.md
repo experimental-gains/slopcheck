@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.16
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.17
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.16
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.17
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.16
+    rev: v0.1.17
     hooks:
       - id: slopcheck
 ```
@@ -211,6 +211,18 @@ and flagged every internal git/path/url dependency as "not found").
 A multiple-constraints list (`foo = [{version = "1.0", python = "<3.11"},
 {version = "2.0", python = ">=3.11"}]`) is still checked as long as at
 least one constraint has a real registry version.
+
+uv's own source-override mechanism, `[tool.uv.sources]`, is the same
+idea with its own independent syntax (fixed in v0.1.17 — earlier
+versions didn't look at this table at all). A `git`, `path`, `workspace`,
+or `url` source is skipped the same way as the Poetry table form above;
+an `index` source only redirects to a *different* package index rather
+than opting out of index resolution, so that name is still checked.
+Found via real-world testing against marimo-team/marimo's actual
+`pyproject.toml`: a bare `marimo_docs` entry sourced locally via
+`[tool.uv.sources] marimo_docs = { path = "./docs", editable = true }`
+genuinely 404s on PyPI, so the pre-fix parser flagged a legitimate
+dependency in a ~15k-star project as hallucinated.
 
 A dependency written with PEP 508's legacy parenthesized version
 specifier (e.g. `numpy (>=1.16)`, carried over from PEP 440/setup.py-style
