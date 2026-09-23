@@ -6,6 +6,7 @@ whole point is checking whether the name exists in a registry at all.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -60,9 +61,23 @@ def _strip_inline_comment(line: str) -> str:
     return line[: match.start()].rstrip() if match else line
 
 
+# All three manifest readers below use "utf-8-sig" rather than plain "utf-8":
+# it transparently strips a leading UTF-8 byte-order mark when one is present
+# and behaves identically to plain "utf-8" when it isn't, so it's a safe
+# blanket default rather than a special case. A BOM-prefixed manifest is real,
+# valid content real tooling handles (npm's own package.json reader strips it,
+# and vitejs/vite's repo ships `playground/resolve/utf8-bom-package/
+# package.json` specifically to test that bundlers resolve it correctly) —
+# found via real-world testing against that exact file. Without this,
+# `json.loads`/`tomllib.loads` raise on the leftover `﻿` and abort the
+# whole scan (worse now that `find_manifests` recurses — see below — since
+# one BOM'd file anywhere in a large tree kills every other manifest's
+# results too), while the line-based `requirements.txt` reader doesn't crash
+# but silently corrupts the *first* line into an unmatchable string, dropping
+# that dependency from checking entirely with no error at all.
 def parse_requirements_txt(path: Path) -> list[Dependency]:
     deps = []
-    for raw_line in path.read_text().splitlines():
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -153,7 +168,7 @@ def _dependency_groups_deps(data: dict) -> list[str]:
 
 
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     raw_specs = _pep621_deps(data) + _poetry_deps(data) + _dependency_groups_deps(data)
     deps = []
     for spec in raw_specs:
@@ -255,7 +270,7 @@ def _yarn_resolution_target(pattern: str) -> str:
 
 
 def parse_package_json(path: Path) -> list[Dependency]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     deps = []
     for section in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
         for name, version in data.get(section, {}).items():
@@ -291,12 +306,40 @@ PARSERS = {
 }
 
 
+# Directories never worth descending into when searching for manifests: version
+# control internals, and anything the corresponding package manager itself
+# populates with *installed* (not declared) dependencies. `node_modules` in
+# particular can contain thousands of nested `package.json` files belonging to
+# already-installed third-party packages, not the project's own declared
+# dependencies — recursing into it would re-check the entire resolved
+# dependency graph (slow, and every name in it is by definition already on the
+# registry, so it's also pure noise). Dot-directories (`.git`, `.venv`, a
+# pip/uv virtualenv, `.tox`, editor/CI config dirs) are skipped as a group for
+# the same reason: none of them hold manifests a human wrote, and `.venv`
+# specifically can contain an installed package's own `pyproject.toml`.
+_SKIP_DIR_NAMES = {"node_modules"}
+
+
 def find_manifests(root: Path) -> list[Path]:
+    """Find every manifest file under `root`, recursing into subdirectories.
+
+    A real monorepo (pnpm/Yarn/npm workspaces, Turborepo, Nx, Lerna, a Python
+    src-layout with multiple packages) declares its actual dependencies across
+    many nested manifests, not just one at the root — e.g. `vitejs/vite`'s
+    root `package.json` has zero runtime `dependencies` at all; the published
+    package's real runtime deps (`lightningcss`, `rolldown`, etc.) live in
+    `packages/vite/package.json`. A non-recursive scan of the root directory
+    alone silently misses every one of them, which defeats the entire point
+    of a supply-chain check on a monorepo. `node_modules` and dot-directories
+    are pruned during the walk (not just filtered from the result) so the
+    walk itself never descends into them.
+    """
     found = []
-    for filename in PARSERS:
-        candidate = root / filename
-        if candidate.is_file():
-            found.append(candidate)
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")]
+        for filename in PARSERS:
+            if filename in filenames:
+                found.append(Path(dirpath) / filename)
     return found
 
 

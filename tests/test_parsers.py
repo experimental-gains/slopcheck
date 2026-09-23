@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from slopcheck.parsers import (
+    find_manifests,
     parse_package_json,
     parse_pyproject_toml,
     parse_requirements_txt,
@@ -457,3 +458,89 @@ def test_parse_pyproject_dependency_groups(tmp_path: Path):
     )
     names = {dep.name for dep in parse_pyproject_toml(pyproject)}
     assert names == {"requests", "pytest", "time-machine", "mkdocs"}
+
+
+def test_find_manifests_recurses_into_workspace_packages(tmp_path: Path):
+    # Regression test for a real coverage gap found via real-world testing
+    # against vitejs/vite's actual repo layout: the root `package.json` of a
+    # pnpm/Yarn/npm-workspaces monorepo commonly declares zero runtime
+    # `dependencies` at all (vite's has none), while the published package's
+    # real runtime deps live several directories down, e.g.
+    # `packages/vite/package.json`. A non-recursive scan of just the root
+    # directory silently missed every nested manifest — which, for a
+    # supply-chain checker, means silently not checking most of the repo's
+    # real dependencies. `find_manifests` must walk subdirectories.
+    (tmp_path / "package.json").write_text('{"devDependencies": {"eslint": "^9.0.0"}}')
+    nested = tmp_path / "packages" / "core"
+    nested.mkdir(parents=True)
+    (nested / "package.json").write_text('{"dependencies": {"rolldown": "^1.0.0"}}')
+    deeper = tmp_path / "apps" / "docs" / "src"
+    deeper.mkdir(parents=True)
+    (deeper / "pyproject.toml").write_text('[project]\nname = "docs"\ndependencies = ["mkdocs"]\n')
+
+    found = {str(p.relative_to(tmp_path)) for p in find_manifests(tmp_path)}
+
+    assert found == {
+        "package.json",
+        str(Path("packages", "core", "package.json")),
+        str(Path("apps", "docs", "src", "pyproject.toml")),
+    }
+
+
+def test_find_manifests_prunes_node_modules_and_dot_directories(tmp_path: Path):
+    # `node_modules` holds already-*installed* packages, not declared
+    # dependencies — recursing into it would re-check the whole resolved
+    # dependency graph (slow, and every name in it necessarily already
+    # exists on the registry, so purely noise). Dot-directories (`.git`,
+    # `.venv`) are pruned the same way; a `.venv` in particular can contain
+    # an installed package's own `pyproject.toml`, which isn't this
+    # project's declared dependency list either.
+    (tmp_path / "package.json").write_text('{"dependencies": {"left-pad": "^1.0.0"}}')
+    nm = tmp_path / "node_modules" / "some-installed-pkg"
+    nm.mkdir(parents=True)
+    (nm / "package.json").write_text('{"name": "some-installed-pkg"}')
+    venv = tmp_path / ".venv" / "lib" / "site-packages" / "pip"
+    venv.mkdir(parents=True)
+    (venv / "pyproject.toml").write_text('[project]\nname = "pip"\n')
+
+    found = {str(p.relative_to(tmp_path)) for p in find_manifests(tmp_path)}
+
+    assert found == {"package.json"}
+
+
+def test_parse_requirements_txt_strips_leading_utf8_bom(tmp_path: Path):
+    # Real-world find: a `requirements.txt` saved by a Windows editor/tool can
+    # carry a leading UTF-8 BOM. Without stripping it, the BOM character
+    # silently glued itself onto the *first* line, which then failed the
+    # name-matching regex and vanished from the checked list entirely — no
+    # error, no warning, just one fewer dependency checked than the file
+    # actually declares.
+    req = tmp_path / "requirements.txt"
+    req.write_bytes(b"\xef\xbb\xbf" + b"requests==2.31.0\nflask\n")
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"requests", "flask"}
+
+
+def test_parse_package_json_strips_leading_utf8_bom(tmp_path: Path):
+    # Real-world find: `vitejs/vite`'s own repo ships a package.json fixture
+    # with a leading UTF-8 BOM (`playground/resolve/utf8-bom-package/
+    # package.json`, used to test that bundlers resolve BOM'd manifests
+    # correctly) — real content real tooling handles. Before stripping the
+    # BOM, `json.loads` raised on it and aborted the whole scan, not just
+    # this one file.
+    pkg = tmp_path / "package.json"
+    pkg.write_bytes(b"\xef\xbb\xbf" + b'{"dependencies": {"left-pad": "^1.0.0"}}')
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"left-pad"}
+
+
+def test_parse_pyproject_toml_strips_leading_utf8_bom(tmp_path: Path):
+    # Same BOM class as the package.json/requirements.txt cases above,
+    # applied to pyproject.toml: `tomllib.loads` raised "Invalid statement"
+    # on a leading BOM and aborted the whole scan.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_bytes(
+        b"\xef\xbb\xbf" + b'[project]\nname = "demo"\ndependencies = ["requests>=2"]\n'
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests"}
