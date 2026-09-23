@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 
 from slopcheck.parsers import (
+    ManifestParseError,
     find_manifests,
+    parse_manifest,
     parse_package_json,
     parse_pyproject_toml,
     parse_requirements_txt,
@@ -10,6 +12,7 @@ from slopcheck.parsers import (
 
 
 def test_parse_requirements_txt(tmp_path: Path):
+    (tmp_path / "other.txt").write_text("pyyaml==6.0\n")
     req = tmp_path / "requirements.txt"
     req.write_text(
         "\n".join(
@@ -27,7 +30,10 @@ def test_parse_requirements_txt(tmp_path: Path):
         )
     )
     names = {dep.name for dep in parse_requirements_txt(req)}
-    assert names == {"requests", "numpy", "flask", "django"}
+    # "-r other.txt" is followed for real, adding pyyaml from the referenced
+    # file — see test_parse_requirements_txt_recurses_into_nested_r_file
+    # below for the dedicated regression coverage.
+    assert names == {"requests", "numpy", "flask", "django", "pyyaml"}
 
 
 def test_parse_requirements_txt_strips_inline_comments(tmp_path: Path):
@@ -544,3 +550,93 @@ def test_parse_pyproject_toml_strips_leading_utf8_bom(tmp_path: Path):
     )
     names = {dep.name for dep in parse_pyproject_toml(pyproject)}
     assert names == {"requests"}
+
+
+def test_parse_requirements_txt_recurses_into_nested_r_file(tmp_path: Path):
+    # Real-world find: Home Assistant core's requirements_test.txt starts
+    # with "-r requirements_test_pre_commit.txt"; cookiecutter-django's
+    # requirements/production.txt starts with "-r base.txt". pip resolves
+    # the referenced path relative to the *referencing file's own
+    # directory*, and installs everything named in it for real — a
+    # hallucinated name placed only in the nested file used to sail through
+    # completely unchecked. Nested inside a subdirectory here specifically
+    # to prove path resolution isn't CWD-relative.
+    sub = tmp_path / "requirements"
+    sub.mkdir()
+    (sub / "base.txt").write_text("django==5.0\ntotally-fake-hallucinated-pkg==1.0\n")
+    prod = sub / "production.txt"
+    prod.write_text("-r base.txt\ngunicorn==22.0\n")
+
+    names = {dep.name for dep in parse_requirements_txt(prod)}
+    assert names == {"django", "totally-fake-hallucinated-pkg", "gunicorn"}
+
+
+def test_parse_requirements_txt_recurses_into_long_form_requirement_flag(tmp_path: Path):
+    (tmp_path / "base.txt").write_text("requests==2.31.0\n")
+    req = tmp_path / "requirements.txt"
+    req.write_text("--requirement base.txt\nflask\n")
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"requests", "flask"}
+
+
+def test_parse_requirements_txt_does_not_recurse_into_constraints_file(tmp_path: Path):
+    # A constraints file (-c/--constraint) only pins versions of packages
+    # already required elsewhere — a name that appears *only* in it is never
+    # actually installed, so it must stay unchecked (unlike -r) to avoid a
+    # false positive on a name pip would never touch.
+    (tmp_path / "constraints.txt").write_text("only-a-version-pin==1.0\n")
+    req = tmp_path / "requirements.txt"
+    req.write_text("-c constraints.txt\nrequests\n")
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"requests"}
+
+
+def test_parse_requirements_txt_missing_nested_r_file_raises_clean_error(tmp_path: Path):
+    req = tmp_path / "requirements.txt"
+    req.write_text("-r does-not-exist.txt\n")
+    try:
+        parse_requirements_txt(req)
+        assert False, "expected ManifestParseError"
+    except ManifestParseError as e:
+        assert "does-not-exist.txt" in str(e)
+
+
+def test_parse_requirements_txt_r_cycle_does_not_hang_or_crash(tmp_path: Path):
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("-r b.txt\npkg-a==1.0\n")
+    b.write_text("-r a.txt\npkg-b==1.0\n")
+    names = {dep.name for dep in parse_requirements_txt(a)}
+    assert names == {"pkg-a", "pkg-b"}
+
+
+def test_parse_requirements_txt_comment_on_nested_r_line(tmp_path: Path):
+    (tmp_path / "base.txt").write_text("requests==2.31.0\n")
+    req = tmp_path / "requirements.txt"
+    req.write_text("-r base.txt  # shared deps\nflask\n")
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"requests", "flask"}
+
+
+def test_parse_manifest_routes_non_canonical_txt_filename_to_requirements_parser(tmp_path: Path):
+    # Real-world find: find_manifests only auto-discovers the exact filename
+    # "requirements.txt", but a real pip project often splits requirements
+    # across differently-named .txt files (Home Assistant core's
+    # requirements_test.txt, cookiecutter-django's requirements/local.txt).
+    # A user pointing slopcheck directly at one of these used to hit
+    # PARSERS[path.name] -> KeyError, an unhandled crash instead of a real
+    # scan or a clean error.
+    req = tmp_path / "requirements_test.txt"
+    req.write_text("pytest==8.0.0\n")
+    names = {dep.name for dep in parse_manifest(req)}
+    assert names == {"pytest"}
+
+
+def test_parse_manifest_unknown_extension_raises_clean_manifest_error(tmp_path: Path):
+    weird = tmp_path / "notes.md"
+    weird.write_text("not a manifest\n")
+    try:
+        parse_manifest(weird)
+        assert False, "expected ManifestParseError"
+    except ManifestParseError as e:
+        assert "notes.md" in str(e)

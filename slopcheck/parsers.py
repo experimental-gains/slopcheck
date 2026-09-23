@@ -75,16 +75,69 @@ def _strip_inline_comment(line: str) -> str:
 # results too), while the line-based `requirements.txt` reader doesn't crash
 # but silently corrupts the *first* line into an unmatchable string, dropping
 # that dependency from checking entirely with no error at all.
+# pip's nested-requirements-file directive, both the short (`-r`) and long
+# (`--requirement`) spellings. A real, common way of structuring
+# requirements.txt across several files (e.g. Home Assistant's core repo:
+# requirements_test.txt starts with "-r requirements_test_pre_commit.txt",
+# cookiecutter-django's requirements/production.txt starts with "-r
+# base.txt") — pip resolves the referenced path *relative to the file that
+# references it*, not the CWD or the top-level file, and recurses into it
+# for real (see pip's own docs on nested requirements files). Without
+# following it, every dependency named only in the referenced file was
+# silently never checked at all — the tool's core job failing silently on
+# a standard, real-world requirements.txt composition pattern, not an edge
+# case.
+_REQ_FILE_RE = re.compile(r"^(?:-r|--requirement)\s+(?P<target>.+?)\s*$")
+
+# pip's constraints-file directive (`-c`/`--constraint`). Deliberately NOT
+# recursed into like `-r` above: per pip's own documentation, a name that
+# appears *only* in a constraints file and nowhere else in the resolved
+# requirement set has no effect at all — pip won't install it. Treating a
+# constraints-only entry as a real dependency would risk a false positive
+# (flagging a name that's merely a version pin for some other project's
+# transitive dependency, never installed by this one) rather than fixing a
+# false negative, so it stays skipped.
+_CONSTRAINT_FILE_RE = re.compile(r"^(?:-c|--constraint)\s+(?P<target>.+?)\s*$")
+
+
 def parse_requirements_txt(path: Path) -> list[Dependency]:
+    return _parse_requirements_txt(path, set())
+
+
+def _parse_requirements_txt(path: Path, seen: set[Path]) -> list[Dependency]:
+    resolved = path.resolve()
+    if resolved in seen:
+        # A `-r` cycle (directly or indirectly self-referencing). Real pip
+        # would also loop forever on this, but there's no reason to hang or
+        # crash a name-existence check over a malformed requirements file —
+        # just stop recursing into an already-visited file.
+        return []
+    seen = seen | {resolved}
+
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        raise ManifestParseError(f"{path}: referenced requirements file not found ({e})") from e
+
     deps = []
-    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if line.startswith(("-r ", "-e ", "--", "-c ")):
-            continue
+        # Strip a trailing comment before checking for -r/-c/-e/-- prefixes
+        # too, not just before the name regex below — a referenced file can
+        # carry an explanatory trailing comment the same way an ordinary
+        # dependency line can (e.g. "-r base.txt  # shared deps"), and
+        # leaving it on would fold the comment text into the target path.
         line = _strip_inline_comment(line)
         if not line:
+            continue
+        req_match = _REQ_FILE_RE.match(line)
+        if req_match:
+            target = path.parent / req_match.group("target")
+            deps.extend(_parse_requirements_txt(target, seen))
+            continue
+        if _CONSTRAINT_FILE_RE.match(line) or line.startswith(("-e ", "--")):
             continue
         if "://" in line:
             continue
@@ -344,7 +397,27 @@ def find_manifests(root: Path) -> list[Path]:
 
 
 def parse_manifest(path: Path) -> list[Dependency]:
-    parser = PARSERS[path.name]
+    parser = PARSERS.get(path.name)
+    if parser is None and path.suffix == ".txt":
+        # `find_manifests` only auto-discovers the exact name "requirements.txt",
+        # but a real pip requirements file is routinely named something else —
+        # pip itself doesn't care about the filename at all, only real-world
+        # convention does. Home Assistant's core repo splits into
+        # requirements_test.txt/requirements_test_pre_commit.txt; cookiecutter-
+        # django splits into requirements/base.txt, local.txt, production.txt.
+        # A user pointing slopcheck directly at one of these (a natural thing
+        # to do, and exactly how the new `-r`-recursion above resolves nested
+        # files too) used to hit `PARSERS[path.name]` -> KeyError, an unhandled
+        # traceback instead of a clean error or a real scan. Any other `.txt`
+        # file is a reasonable enough match for the line-based requirements
+        # format (there's no other `.txt`-suffixed manifest this tool knows
+        # about) to treat the same way rather than crash.
+        parser = parse_requirements_txt
+    if parser is None:
+        raise ManifestParseError(
+            f"{path}: don't know how to parse this file "
+            "(expected requirements.txt, pyproject.toml, package.json, or a *.txt requirements file)"
+        )
     try:
         return parser(path)
     except (json.JSONDecodeError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:

@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.15
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.16
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.15
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.16
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.15
+    rev: v0.1.16
     hooks:
       - id: slopcheck
 ```
@@ -236,6 +236,24 @@ An `{include-group = "other"}` entry references another group instead of
 naming a package and is correctly skipped rather than treated as a
 dependency name; the group it points at still gets checked on its own
 turn through the table.
+
+A `requirements.txt` line starting with `-r`/`--requirement` (pip's
+nested-requirements-file directive, resolved relative to the file that
+references it) is now followed for real instead of silently skipped
+(fixed in v0.1.16 — real, common examples: Home Assistant core's
+`requirements_test.txt` starts with `-r
+requirements_test_pre_commit.txt`; cookiecutter-django splits into
+`requirements/base.txt`, `local.txt`, `production.txt` chained with
+`-r`). Earlier versions never looked inside the referenced file at all,
+so a hallucinated name placed only there sailed through completely
+unchecked. `-c`/`--constraint` lines are deliberately still skipped
+rather than followed — a name that appears only in a constraints file
+and nowhere else in the requirement set has no effect on what pip
+actually installs. Passing a differently-named `.txt` requirements
+file directly on the command line (`slopcheck requirements_test.txt`,
+rather than the auto-discovered exact name `requirements.txt`) used to
+crash with an unhandled `KeyError` instead of scanning it; it's now
+handled the same as `requirements.txt`.
 
 ## Private/internal registries
 
