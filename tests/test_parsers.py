@@ -513,6 +513,54 @@ def test_parse_pyproject_dependency_groups(tmp_path: Path):
     assert names == {"requests", "pytest", "time-machine", "mkdocs"}
 
 
+def test_parse_pyproject_setuptools_dynamic_dependencies(tmp_path: Path):
+    # setuptools' own dynamic-metadata mechanism
+    # (https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html#dynamic-metadata):
+    # `[project].dynamic` lists "dependencies"/"optional-dependencies" and defers
+    # their real values to `[tool.setuptools.dynamic]`, which points at one or more
+    # requirements-style files instead of listing specs inline under [project]
+    # (PEP 621 requires the field be *absent* from [project] when it's dynamic).
+    # Found via real-world testing against compas-dev/compas's actual
+    # pyproject.toml, which uses exactly this shape — the pre-fix parser reported
+    # "0 dependencies checked" against it, silently missing every real dependency.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dynamic = ["dependencies", "optional-dependencies"]
+
+        [tool.setuptools.dynamic]
+        dependencies = { file = "requirements.txt" }
+        optional-dependencies.dev = { file = ["requirements-dev.txt"] }
+        """
+    )
+    (tmp_path / "requirements.txt").write_text("jsonschema\nnetworkx >= 3.0\nnumpy >= 1.15.4\n")
+    (tmp_path / "requirements-dev.txt").write_text("black >=22.12.0\npytest-cov\n")
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"jsonschema", "networkx", "numpy", "black", "pytest-cov"}
+
+
+def test_parse_pyproject_setuptools_dynamic_ignored_when_not_declared_dynamic(tmp_path: Path):
+    # A [tool.setuptools.dynamic] table with no corresponding entry in
+    # [project].dynamic isn't actually used by setuptools for that field — must
+    # not be picked up just because the table happens to be present.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests"]
+
+        [tool.setuptools.dynamic]
+        dependencies = { file = "requirements.txt" }
+        """
+    )
+    (tmp_path / "requirements.txt").write_text("should-not-be-read\n")
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests"}
+
+
 def test_find_manifests_recurses_into_workspace_packages(tmp_path: Path):
     # Regression test for a real coverage gap found via real-world testing
     # against vitejs/vite's actual repo layout: the root `package.json` of a
