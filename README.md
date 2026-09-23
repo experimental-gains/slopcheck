@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.13
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.14
 ```
 
 ## Usage
@@ -97,7 +97,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.13
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.14
     slopcheck
 ```
 
@@ -106,7 +106,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.13
+    rev: v0.1.14
     hooks:
       - id: slopcheck
 ```
@@ -167,6 +167,16 @@ package) — real syntax from jest's `package.json`, and stripped the
 same way (fixed in v0.1.8 — earlier versions checked the pattern's
 range/protocol suffix as part of the package name and always flagged
 it "not found").
+
+pnpm has its own `overrides` field too, nested under a top-level
+`"pnpm"` key (`"pnpm": { "overrides": { ... } }`) instead of npm's
+root-level `overrides` — a real, current convention (e.g. Prisma's
+`package.json`) that a manifest can use in addition to, not instead
+of, the root-level field. Now read the same way as npm's `overrides`,
+including the same `@version`-scoped-key suffix stripping (fixed in
+v0.1.14 — earlier versions only read the root-level `overrides` key,
+so every package named under `pnpm.overrides` was silently never
+checked).
 
 Poetry's table-form dependencies (`{ git = "..." }`, `{ path = "..." }`,
 `{ url = "..." }`) point at a git remote, a local path, or an arbitrary
