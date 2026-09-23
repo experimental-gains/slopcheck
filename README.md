@@ -72,13 +72,14 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.14
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.15
 ```
 
 ## Usage
 
 ```bash
-# scan the current directory for requirements.txt / pyproject.toml / package.json
+# scan the current directory (and every subdirectory) for
+# requirements.txt / pyproject.toml / package.json
 slopcheck
 
 # scan specific files
@@ -97,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.14
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.15
     slopcheck
 ```
 
@@ -106,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.14
+    rev: v0.1.15
     hooks:
       - id: slopcheck
 ```
@@ -177,6 +178,28 @@ including the same `@version`-scoped-key suffix stripping (fixed in
 v0.1.14 — earlier versions only read the root-level `overrides` key,
 so every package named under `pnpm.overrides` was silently never
 checked).
+
+A directory scan (`slopcheck` with no arguments, or `slopcheck <dir>`)
+now recurses into subdirectories to pick up every workspace member's
+own manifest, not just the one at the scanned directory's top level
+(fixed in v0.1.15). Real monorepos commonly declare their actual
+runtime dependencies several directories down rather than at the root
+— `vitejs/vite`'s own repo is a real example: the root `package.json`
+has zero runtime `dependencies` at all, while the published package's
+real ones (`rolldown`, `lightningcss`, etc.) live in
+`packages/vite/package.json`. Earlier versions only checked the exact
+directory passed in, so running `slopcheck` at a monorepo's root
+silently checked almost nothing. `node_modules` (already-*installed*
+packages, not declared ones) and dot-directories (`.git`, `.venv`,
+etc.) are pruned from the walk.
+
+A manifest file with a leading UTF-8 byte-order mark — common from
+Windows-authored files, and real enough that `vitejs/vite`'s own repo
+ships a BOM'd `package.json` test fixture — is now read correctly
+(fixed in v0.1.15). Earlier versions either aborted the entire scan
+(`package.json`/`pyproject.toml`, one bad file taking down every other
+manifest's results with it) or silently dropped just the first
+dependency in the file without any error at all (`requirements.txt`).
 
 Poetry's table-form dependencies (`{ git = "..." }`, `{ path = "..." }`,
 `{ url = "..." }`) point at a git remote, a local path, or an arbitrary
