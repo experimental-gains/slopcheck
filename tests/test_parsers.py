@@ -397,6 +397,53 @@ def test_parse_pyproject_poetry_skips_non_registry_sources(tmp_path: Path):
     assert names == {"requests", "pytest", "multi-constraint"}
 
 
+def test_parse_pyproject_uv_sources_skips_non_registry(tmp_path: Path):
+    # uv's own source-override mechanism ([tool.uv.sources]) is the same idea
+    # as Poetry's git/path/url table form above, but for a *separate* tool
+    # (uv has become one of the most common Python dependency managers in
+    # real current projects: litellm, crewAI, pydantic-ai, langflow, marimo,
+    # and more all use it) with its own independent syntax that this parser
+    # never looked at. Found via real-world testing against marimo-team/
+    # marimo's actual pyproject.toml: a bare `marimo_docs` entry in
+    # [project.optional-dependencies].docs, with `[tool.uv.sources]
+    # marimo_docs = { path = "./docs", editable = true }` marking it as a
+    # local editable install of the repo's own docs/ directory — genuinely
+    # 404 on PyPI (confirmed live, both `marimo_docs` and `marimo-docs`
+    # spellings), so the pre-fix parser flagged a real, legitimate dependency
+    # in a ~15k-star project as a hallucinated/not-found package. `git`/
+    # `path`/`workspace`/`url` sources bypass the index entirely and should
+    # be skipped; `index` only redirects to a *different* index, so that name
+    # still needs checking; a marker-conditional list (per-platform sources)
+    # should be skipped only if every entry is non-registry.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests", "torch"]
+
+        [project.optional-dependencies]
+        docs = ["marimo_docs", "mkdocs"]
+
+        [dependency-groups]
+        dev = ["internal-git-tool", "pytest"]
+
+        [tool.uv.sources]
+        marimo_docs = { path = "./docs", editable = true }
+        internal-git-tool = { git = "https://example.com/internal-git-tool.git" }
+        internal-workspace-lib = { workspace = true }
+        internal-url-lib = { url = "https://example.com/internal-url-lib.tar.gz" }
+        torch = { index = "pytorch-cpu" }
+        platform-git-lib = [
+            { git = "https://example.com/a.git", marker = "sys_platform == 'darwin'" },
+            { git = "https://example.com/b.git", marker = "sys_platform == 'linux'" },
+        ]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "mkdocs", "pytest", "torch"}
+
+
 def test_parse_pyproject_poetry_legacy_dev_dependencies(tmp_path: Path):
     # Pre-1.2 Poetry used [tool.poetry.dev-dependencies] instead of a
     # [tool.poetry.group.*.dependencies] table; both forms are still seen

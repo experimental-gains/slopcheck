@@ -220,14 +220,73 @@ def _dependency_groups_deps(data: dict) -> list[str]:
     return names
 
 
+_NAME_NORMALIZE_RE = re.compile(r"[-_.]+")
+
+
+def _normalize_name(name: str) -> str:
+    """PEP 503 name normalization: case- and separator-insensitive.
+
+    Needed to match a `[tool.uv.sources]` key against a PEP 621/dependency-
+    groups spec name reliably — real files write the same package with
+    different casing/separators in the two places (uv itself, and pip,
+    treat `Foo-Bar`, `foo_bar`, and `foo.bar` as the same distribution).
+    """
+    return _NAME_NORMALIZE_RE.sub("-", name).lower()
+
+
+def _is_uv_registry_source(value) -> bool:
+    """Whether a `[tool.uv.sources]` entry still resolves via a package index.
+
+    uv (https://docs.astral.sh/uv/concepts/projects/dependencies/#dependency-sources)
+    lets a `[project.dependencies]`/`optional-dependencies`/`dependency-groups`
+    entry's *source* be overridden independently of its name — the same idea
+    as Poetry's git/path/url table form (`_is_poetry_registry_dep` above) and
+    npm's `workspace:`/`file:`/`git:` protocols, but for uv specifically,
+    which has become one of the most common Python packaging/dependency tools
+    in real current projects (litellm, crewAI, pydantic-ai, langflow, and
+    many more all use it) and wasn't handled here at all. `git`/`path`/
+    `workspace` sources bypass every package index entirely (`workspace`
+    resolves to a local sibling package in the same repo, e.g. a docs- or
+    tooling-only package that's never published — confirmed live against
+    marimo-team/marimo's real pyproject.toml: `marimo_docs = { path =
+    "./docs", editable = true }` under `[tool.uv.sources]`, with
+    `marimo_docs` a bare entry in `[project.optional-dependencies].docs` and
+    genuinely 404 on PyPI, both spellings). `url` points at one specific
+    file, not an index either. `index` merely redirects to a *different*
+    index (e.g. a PyTorch build's own package index) rather than opting out
+    of index resolution, so those names still need checking. A value can
+    also be a list of per-platform/marker source tables; mirrors
+    `_is_poetry_registry_dep`'s multiple-constraints bias of treating the
+    name as still-registry-resolvable if any entry is.
+    """
+    if isinstance(value, dict):
+        return not any(key in value for key in ("git", "path", "workspace", "url"))
+    if isinstance(value, list):
+        return any(_is_uv_registry_source(item) for item in value)
+    return True
+
+
+def _uv_non_registry_names(data: dict) -> set[str]:
+    sources = data.get("tool", {}).get("uv", {}).get("sources", {})
+    return {
+        _normalize_name(name)
+        for name, value in sources.items()
+        if not _is_uv_registry_source(value)
+    }
+
+
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
     data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     raw_specs = _pep621_deps(data) + _poetry_deps(data) + _dependency_groups_deps(data)
+    skip_names = _uv_non_registry_names(data)
     deps = []
     for spec in raw_specs:
         match = _REQ_LINE_RE.match(spec.strip())
         if match:
-            deps.append(Dependency(match.group("name"), "pypi", str(path)))
+            name = match.group("name")
+            if _normalize_name(name) in skip_names:
+                continue
+            deps.append(Dependency(name, "pypi", str(path)))
     return deps
 
 
