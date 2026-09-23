@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.17
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.18
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.17
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.18
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.17
+    rev: v0.1.18
     hooks:
       - id: slopcheck
 ```
@@ -213,7 +213,7 @@ A multiple-constraints list (`foo = [{version = "1.0", python = "<3.11"},
 least one constraint has a real registry version.
 
 uv's own source-override mechanism, `[tool.uv.sources]`, is the same
-idea with its own independent syntax (fixed in v0.1.17 — earlier
+idea with its own independent syntax (fixed in v0.1.18 — earlier
 versions didn't look at this table at all). A `git`, `path`, `workspace`,
 or `url` source is skipped the same way as the Poetry table form above;
 an `index` source only redirects to a *different* package index rather
@@ -266,6 +266,22 @@ file directly on the command line (`slopcheck requirements_test.txt`,
 rather than the auto-discovered exact name `requirements.txt`) used to
 crash with an unhandled `KeyError` instead of scanning it; it's now
 handled the same as `requirements.txt`.
+
+setuptools' own [dynamic metadata](https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html#dynamic-metadata)
+feature lets `[project].dynamic` list `dependencies`/
+`optional-dependencies` and defer their actual values to
+`[tool.setuptools.dynamic]`, which points at a requirements-style file
+instead of listing specs inline under `[project]` — PEP 621 requires a
+field listed as dynamic to be *absent* from `[project]` directly, so
+this table is the only place those dependencies exist. It's now read
+the same way a standalone `requirements.txt` is (fixed in v0.1.18 —
+earlier versions only looked at `[project.dependencies]`, so a project
+using this feature had every dependency silently skipped). Found via
+real-world testing against `compas-dev/compas`'s actual
+`pyproject.toml`: `dynamic = ['dependencies', 'optional-dependencies',
+'version']` with `[tool.setuptools.dynamic] dependencies = { file =
+"requirements.txt" }` meant the pre-fix parser reported "0 dependencies
+checked" despite 5 real runtime deps and 11 dev deps.
 
 ## Private/internal registries
 
