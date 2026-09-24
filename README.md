@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.18
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.19
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.18
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.19
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.18
+    rev: v0.1.19
     hooks:
       - id: slopcheck
 ```
@@ -309,6 +309,18 @@ a hallucination until this fix. An npm scope mapping only exempts
 packages under that scope — an unrelated hallucinated dependency in
 the same `package.json` is still
 flagged and still fails CI.
+
+pip's own per-user config file location moves when `XDG_CONFIG_HOME`
+is set — confirmed live against real pip (`pip config -v list`):
+`$XDG_CONFIG_HOME/pip/pip.conf` is used *instead of*
+`~/.config/pip/pip.conf`, not in addition to it, matching pip's own
+vendored `platformdirs` implementation exactly. Before v0.1.19, this
+tool only ever checked the `~/.config/pip/pip.conf` default, so a
+private index configured via a customized `XDG_CONFIG_HOME` (a common
+pattern for anyone using a dotfiles manager, or any distro/desktop
+environment that sets it by default) was invisible to it — the exact
+same false-hallucination failure mode this section exists to prevent,
+just reached through an env var this tool wasn't reading yet.
 
 ## requirements.txt inline comments
 

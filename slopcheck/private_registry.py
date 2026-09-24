@@ -25,6 +25,29 @@ from pathlib import Path
 _PIP_DIRECTIVE_RE = re.compile(r"^(?:-i|--(?:index-url|extra-index-url|pypi-url)\b)")
 
 
+def _pip_user_config_dir() -> Path:
+    """Where pip looks for its "new" per-user config file, on Linux.
+
+    Mirrors pip's own resolution exactly (pip._internal.utils.appdirs.
+    user_config_dir -> pip._vendor.platformdirs.unix.Unix.user_config_dir):
+    `$XDG_CONFIG_HOME/pip` when XDG_CONFIG_HOME is set to a non-blank value,
+    falling back to `~/.config/pip` only otherwise — confirmed live with
+    `pip config -v list`: setting XDG_CONFIG_HOME replaces the `~/.config`
+    lookup outright rather than adding to it, so a private index configured
+    via `$XDG_CONFIG_HOME/pip/pip.conf` (a common pattern for anyone using a
+    dotfiles manager or otherwise customizing XDG_CONFIG_HOME) was
+    previously invisible to `_pip_config_has_extra_index` — the hardcoded
+    `~/.config/pip/pip.conf` path this tool checked isn't the file pip
+    itself would actually read, so a legitimately private-only dependency
+    resolvable by a real `pip install` in that environment got reported as
+    a plain `not_found` hallucination instead of downgraded to `private`.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    if xdg.strip():
+        return Path(xdg) / "pip"
+    return Path.home() / ".config" / "pip"
+
+
 def _pip_config_paths() -> list[Path]:
     paths = []
     env_path = os.environ.get("PIP_CONFIG_FILE")
@@ -33,7 +56,7 @@ def _pip_config_paths() -> list[Path]:
     virtual_env = os.environ.get("VIRTUAL_ENV")
     if virtual_env:
         paths.append(Path(virtual_env) / "pip.conf")
-    paths.append(Path.home() / ".config" / "pip" / "pip.conf")
+    paths.append(_pip_user_config_dir() / "pip.conf")
     paths.append(Path.home() / ".pip" / "pip.conf")
     paths.append(Path("/etc/pip.conf"))
     return paths
