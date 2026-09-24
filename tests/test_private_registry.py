@@ -336,30 +336,107 @@ def test_npmrc_paths_skips_missing_project_root_file_and_checks_home(
     assert scopes == {"@acmecorp"}
 
 
+_DEFAULT_GLOBAL_NPMRC_PATHS = [Path("/etc/npmrc"), Path("/usr/local/etc/npmrc")]
+
+
 def test_npmrc_paths_uses_dotfile_name(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("npm_config_userconfig", raising=False)
     monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
+    monkeypatch.delenv("npm_config_globalconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_GLOBALCONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    assert private_registry._npmrc_paths([]) == [tmp_path / ".npmrc"]
+    assert private_registry._npmrc_paths([]) == [tmp_path / ".npmrc", *_DEFAULT_GLOBAL_NPMRC_PATHS]
 
 
 def test_npmrc_paths_uses_userconfig_env_var_override(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
+    monkeypatch.delenv("npm_config_globalconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_GLOBALCONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     custom = tmp_path / "custom.npmrc"
     monkeypatch.setenv("npm_config_userconfig", str(custom))
 
-    assert private_registry._npmrc_paths([]) == [custom]
+    assert private_registry._npmrc_paths([]) == [custom, *_DEFAULT_GLOBAL_NPMRC_PATHS]
 
 
 def test_npmrc_paths_uses_uppercase_userconfig_env_var_override(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("npm_config_userconfig", raising=False)
+    monkeypatch.delenv("npm_config_globalconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_GLOBALCONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     custom = tmp_path / "custom.npmrc"
     monkeypatch.setenv("NPM_CONFIG_USERCONFIG", str(custom))
 
-    assert private_registry._npmrc_paths([]) == [custom]
+    assert private_registry._npmrc_paths([]) == [custom, *_DEFAULT_GLOBAL_NPMRC_PATHS]
+
+
+def test_npmrc_paths_uses_globalconfig_env_var_override(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("npm_config_userconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_GLOBALCONFIG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    custom_global = tmp_path / "custom-global.npmrc"
+    monkeypatch.setenv("npm_config_globalconfig", str(custom_global))
+
+    assert private_registry._npmrc_paths([]) == [tmp_path / ".npmrc", custom_global]
+
+
+def test_npmrc_paths_uses_uppercase_globalconfig_env_var_override(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("npm_config_userconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
+    monkeypatch.delenv("npm_config_globalconfig", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    custom_global = tmp_path / "custom-global.npmrc"
+    monkeypatch.setenv("NPM_CONFIG_GLOBALCONFIG", str(custom_global))
+
+    assert private_registry._npmrc_paths([]) == [tmp_path / ".npmrc", custom_global]
+
+
+def test_npm_private_registry_from_global_npmrc_scope(tmp_path: Path, monkeypatch):
+    """End-to-end regression for the missing-global-npmrc gap: a scope
+    mapping configured only via npm's global config file must be detected,
+    since real npm (confirmed live: `npm_config_globalconfig=<file> npm
+    config get <scope>:registry`) resolves it from exactly that file even
+    when no project or user npmrc mentions the scope at all — a real
+    pattern for an org baking a private-registry mapping into a CI runner
+    or Docker base image at the machine level. Before the fix, this always
+    missed the scope and would report a legitimately-installable
+    private-only dependency as a plain `not_found` hallucination instead
+    of `private`/unverified."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    global_conf = tmp_path / "global.npmrc"
+    global_conf.write_text("@acmecorp:registry=https://npm.internal.example/\n")
+    monkeypatch.setenv("npm_config_globalconfig", str(global_conf))
+
+    blanket, scopes = npm_private_registry_context([])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_npm_private_registry_from_global_npmrc_blanket(tmp_path: Path, monkeypatch):
+    """Same gap, blanket form: an org-wide mirror/proxy configured only via
+    the global npmrc's `registry=` line (no env var, no project/user
+    npmrc) is a real, arguably more common enterprise pattern than a
+    scope mapping (Artifactory/Nexus/Verdaccio routing *every* npm
+    install through an internal proxy) — confirmed live the same way.
+    Before the fix this was invisible, so every dependency in the project
+    would be checked against the wrong (public) registry."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    global_conf = tmp_path / "global.npmrc"
+    global_conf.write_text("registry=https://npm.internal.example/\n")
+    monkeypatch.setenv("npm_config_globalconfig", str(global_conf))
+
+    blanket, _scopes = npm_private_registry_context([])
+
+    assert blanket is True
 
 
 def test_npm_private_registry_from_relocated_userconfig(tmp_path: Path, monkeypatch):

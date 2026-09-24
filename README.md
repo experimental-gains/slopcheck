@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.20
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.21
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.20
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.21
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.20
+    rev: v0.1.21
     hooks:
       - id: slopcheck
 ```
@@ -326,12 +326,34 @@ npm's own per-user config file location moves the same way when
 `npm_config_userconfig` (or the uppercase `NPM_CONFIG_USERCONFIG`
 spelling — confirmed live that npm accepts either, or any mixed case)
 is set — confirmed live against real npm (`npm config get`) that the
-relocated file is read *instead of* `~/.npmrc`. Before v0.1.20, this
+relocated file is read *instead of* `~/.npmrc`. Before v0.1.21, this
 tool only ever checked `~/.npmrc`, so a scope-to-registry mapping
 configured only via a relocated user config (the npm analog of the
 `XDG_CONFIG_HOME` gap above — a real pattern for dotfiles managers and
 custom CI images) was invisible to it, the same false-hallucination
 failure mode reached through a different env var.
+
+npm also reads a machine-wide *global* config file, beneath the
+project/user ones in precedence but still consulted for any key they
+don't set — confirmed live with a real `npm install` that a scope
+mapping, or a blanket `registry=` override, placed only there is
+genuinely honored. That's a real deployment pattern: an org baking a
+private-registry mapping into a CI runner or Docker base image at the
+machine level, so every project's and every user's own `.npmrc` stays
+untouched. Before v0.1.21, this tool never read that file at all, so
+either form of a global-only override was invisible to it — the
+blanket form is the more consequential of the two, since it means
+*every* npm dependency in the project got checked against the wrong
+registry, not just packages under one scope. Its location can be
+relocated the same way as `userconfig`, via `npm_config_globalconfig`/
+`NPM_CONFIG_GLOBALCONFIG` — confirmed live, same case-insensitive
+resolution. With no override, npm derives the location from its own
+install-time global prefix, which has no single portable default (it
+depends on how node/npm was installed); this tool checks the two most
+common real-world locations, `/etc/npmrc` (Debian/Ubuntu's packaged
+npm hardcodes this, a common Docker/CI base) and `/usr/local/etc/npmrc`
+(npm's own documented default example, matching an official
+installer/nvm/Homebrew-on-Linux install).
 
 ## requirements.txt inline comments
 

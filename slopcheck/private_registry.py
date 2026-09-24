@@ -102,6 +102,37 @@ _NPMRC_SCOPE_RE = re.compile(r"^(@[^:=\s]+):registry\s*=")
 _NPMRC_BLANKET_RE = re.compile(r"^registry\s*=")
 
 
+def _npm_global_config_paths() -> list[Path]:
+    # npm also reads a machine-wide "global" config file, beneath the
+    # per-user one in precedence but still consulted for any key the
+    # project/user files don't set — confirmed live with a real
+    # `npm install` against a throwaway scope: a scope-to-registry mapping
+    # *or* a blanket `registry=` override placed only in the global config
+    # is genuinely honored, no project/user npmrc involved at all. This is
+    # a real deployment pattern: an org baking a private-registry mapping
+    # into a CI runner or Docker base image at the machine level, keeping
+    # every project's and every user's own npmrc untouched.
+    #
+    # Its location can be relocated the same way as `userconfig`, via an
+    # `npm_config_globalconfig`/`NPM_CONFIG_GLOBALCONFIG` env var — confirmed
+    # live, same case-insensitive resolution as userconfig.
+    override = os.environ.get("npm_config_globalconfig") or os.environ.get("NPM_CONFIG_GLOBALCONFIG")
+    if override:
+        return [Path(override)]
+    # With no override, npm derives this from its own install-time global
+    # --prefix, which has no single portable default — it depends on how
+    # node/npm was installed. Confirmed live on this box: Debian/Ubuntu's
+    # packaged npm ships a builtin config hardcoding `globalconfig=/etc/npmrc`
+    # (a common Docker/CI base). npm's own source documents its own
+    # non-Debian-patched default example as "the global --prefix setting
+    # plus 'etc/npmrc' ... for example, '/usr/local/etc/npmrc'" (the
+    # standard result when --prefix defaults to /usr/local, e.g. an
+    # official installer/nvm/Homebrew-on-Linux install). Rather than guess
+    # one, check both well-known static locations, the same shape
+    # `_pip_config_paths` already uses for `/etc/pip.conf`.
+    return [Path("/etc/npmrc"), Path("/usr/local/etc/npmrc")]
+
+
 def _npmrc_paths(project_roots: list[Path]) -> list[Path]:
     # npm's per-user config file defaults to ~/.npmrc, but `userconfig`
     # (like every other npm config key) can itself be set via an
@@ -118,6 +149,7 @@ def _npmrc_paths(project_roots: list[Path]) -> list[Path]:
     user_config = os.environ.get("npm_config_userconfig") or os.environ.get("NPM_CONFIG_USERCONFIG")
     paths = [root / ".npmrc" for root in project_roots]
     paths.append(Path(user_config) if user_config else Path.home() / ".npmrc")
+    paths.extend(_npm_global_config_paths())
     return paths
 
 
