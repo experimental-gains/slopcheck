@@ -337,6 +337,48 @@ def test_npmrc_paths_skips_missing_project_root_file_and_checks_home(
 
 
 def test_npmrc_paths_uses_dotfile_name(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("npm_config_userconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert private_registry._npmrc_paths([]) == [tmp_path / ".npmrc"]
+
+
+def test_npmrc_paths_uses_userconfig_env_var_override(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    custom = tmp_path / "custom.npmrc"
+    monkeypatch.setenv("npm_config_userconfig", str(custom))
+
+    assert private_registry._npmrc_paths([]) == [custom]
+
+
+def test_npmrc_paths_uses_uppercase_userconfig_env_var_override(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("npm_config_userconfig", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    custom = tmp_path / "custom.npmrc"
+    monkeypatch.setenv("NPM_CONFIG_USERCONFIG", str(custom))
+
+    assert private_registry._npmrc_paths([]) == [custom]
+
+
+def test_npm_private_registry_from_relocated_userconfig(tmp_path: Path, monkeypatch):
+    """End-to-end regression for the npm_config_userconfig gap: a scope
+    mapping configured only via a relocated user config must be detected,
+    since real npm (confirmed live) resolves it from exactly that file
+    instead of ~/.npmrc when the env var is set — before the fix, this
+    always missed the scope and would report a legitimately-installable
+    private-only dependency as a plain `not_found` hallucination instead
+    of `private`/unverified."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    custom = tmp_path / "custom.npmrc"
+    custom.write_text("@acmecorp:registry=https://npm.internal.example/\n")
+    monkeypatch.setenv("npm_config_userconfig", str(custom))
+
+    blanket, scopes = npm_private_registry_context([])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}

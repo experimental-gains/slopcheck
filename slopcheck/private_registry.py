@@ -103,8 +103,21 @@ _NPMRC_BLANKET_RE = re.compile(r"^registry\s*=")
 
 
 def _npmrc_paths(project_roots: list[Path]) -> list[Path]:
+    # npm's per-user config file defaults to ~/.npmrc, but `userconfig`
+    # (like every other npm config key) can itself be set via an
+    # `npm_config_userconfig` env var and relocate it — confirmed live
+    # (`npm_config_userconfig=/path/to/file npm config get <key>` actually
+    # reads that file instead of ~/.npmrc, case-insensitively: lowercase,
+    # uppercase, and mixed-case env var spellings all worked). A scope
+    # mapping placed only in that relocated file (a real pattern for
+    # anyone managing dotfiles/CI images with a non-default npmrc
+    # location, the npm analog of the already-fixed pip XDG_CONFIG_HOME
+    # gap below) was previously invisible here, so a legitimately
+    # private-only npm dependency got reported as a plain `not_found`
+    # hallucination instead of downgraded to `private`.
+    user_config = os.environ.get("npm_config_userconfig") or os.environ.get("NPM_CONFIG_USERCONFIG")
     paths = [root / ".npmrc" for root in project_roots]
-    paths.append(Path.home() / ".npmrc")
+    paths.append(Path(user_config) if user_config else Path.home() / ".npmrc")
     return paths
 
 

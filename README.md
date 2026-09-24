@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.19
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.20
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.19
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.20
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.19
+    rev: v0.1.20
     hooks:
       - id: slopcheck
 ```
@@ -321,6 +321,17 @@ pattern for anyone using a dotfiles manager, or any distro/desktop
 environment that sets it by default) was invisible to it — the exact
 same false-hallucination failure mode this section exists to prevent,
 just reached through an env var this tool wasn't reading yet.
+
+npm's own per-user config file location moves the same way when
+`npm_config_userconfig` (or the uppercase `NPM_CONFIG_USERCONFIG`
+spelling — confirmed live that npm accepts either, or any mixed case)
+is set — confirmed live against real npm (`npm config get`) that the
+relocated file is read *instead of* `~/.npmrc`. Before v0.1.20, this
+tool only ever checked `~/.npmrc`, so a scope-to-registry mapping
+configured only via a relocated user config (the npm analog of the
+`XDG_CONFIG_HOME` gap above — a real pattern for dotfiles managers and
+custom CI images) was invisible to it, the same false-hallucination
+failure mode reached through a different env var.
 
 ## requirements.txt inline comments
 
