@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.21
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.22
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.21
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.22
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.21
+    rev: v0.1.22
     hooks:
       - id: slopcheck
 ```
@@ -354,6 +354,23 @@ common real-world locations, `/etc/npmrc` (Debian/Ubuntu's packaged
 npm hardcodes this, a common Docker/CI base) and `/usr/local/etc/npmrc`
 (npm's own documented default example, matching an official
 installer/nvm/Homebrew-on-Linux install).
+
+Yarn Berry (v2 and later) doesn't read `.npmrc` for its own registry
+config at all — it has an entirely separate YAML config file,
+`.yarnrc.yml`, with a top-level `npmRegistryServer:` key for a blanket
+override and a `npmScopes.<name>.npmRegistryServer:` key for a
+scope-specific one, plus a `YARN_NPM_REGISTRY_SERVER` env var
+equivalent of the blanket form. Before v0.1.22, this tool only ever
+looked at `.npmrc`, so a project using Yarn Berry with a private
+registry configured this way had every legitimately-private dependency
+flagged as a plain hallucination — confirmed live with a real `yarn
+install` against a throwaway local registry, for both the blanket and
+scoped forms and the env var, that Yarn genuinely routes resolution
+through the configured address instead of the public npm registry. Like
+npm's `.npmrc`, `.yarnrc.yml` is read from the project root and merged
+with a home-directory global one (`~/.yarnrc.yml`, also confirmed live);
+the filename itself can be relocated via `YARN_RC_FILENAME`, mirroring
+npm's `npm_config_userconfig`.
 
 ## requirements.txt inline comments
 

@@ -459,3 +459,135 @@ def test_npm_private_registry_from_relocated_userconfig(tmp_path: Path, monkeypa
 
     assert blanket is False
     assert scopes == {"@acmecorp"}
+
+
+def _clear_registry_env(monkeypatch):
+    for var in (
+        "npm_config_registry",
+        "NPM_CONFIG_REGISTRY",
+        "YARN_NPM_REGISTRY_SERVER",
+        "YARN_RC_FILENAME",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_yarnrc_scope_registry(tmp_path: Path, monkeypatch):
+    """End-to-end regression: Yarn Berry (v2+) doesn't read `.npmrc` at all —
+    its own `.yarnrc.yml` is a separate config file entirely invisible to
+    the `.npmrc`-only detection above. Confirmed live with a real `yarn
+    install`: a scope routed to a private registry only via
+    `npmScopes.<name>.npmRegistryServer` in `.yarnrc.yml` is genuinely
+    honored (the resolution step visibly tried the configured address).
+    Before this fix, a legitimately-installable Yarn-Berry-private
+    dependency was reported as a plain `not_found` hallucination."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".yarnrc.yml").write_text(
+        "nodeLinker: node-modules\n"
+        "npmScopes:\n"
+        "  acmecorp:\n"
+        '    npmRegistryServer: "https://npm.internal.example/"\n'
+    )
+
+    blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_yarnrc_blanket_registry(tmp_path: Path, monkeypatch):
+    """Same gap, blanket form: confirmed live that a top-level
+    `npmRegistryServer:` in `.yarnrc.yml` routes every package through it,
+    the Yarn-Berry analog of npm's `registry=` line."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".yarnrc.yml").write_text('npmRegistryServer: "https://npm.internal.example/"\n')
+
+    blanket, _scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is True
+
+
+def test_yarnrc_env_var_triggers_blanket(tmp_path: Path, monkeypatch):
+    """`YARN_NPM_REGISTRY_SERVER` is the env var equivalent of the blanket
+    `.yarnrc.yml` form — confirmed live (a real `yarn install` attempted to
+    connect to the address it named, with no `.yarnrc.yml` involved)."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("YARN_NPM_REGISTRY_SERVER", "https://npm.internal.example/")
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    blanket, _scopes = npm_private_registry_context([])
+
+    assert blanket is True
+
+
+def test_yarnrc_home_global_config_is_read(tmp_path: Path, monkeypatch):
+    """Yarn Berry merges a home-directory `~/.yarnrc.yml` in as a global
+    config, the same way npm has a separate per-user npmrc — confirmed live:
+    a scope mapping placed only there (no project-level `.yarnrc.yml` at
+    all) was genuinely honored by a real `yarn install`."""
+    _clear_registry_env(monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".yarnrc.yml").write_text(
+        "npmScopes:\n  acmecorp:\n    npmRegistryServer: https://npm.internal.example/\n"
+    )
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    _blanket, scopes = npm_private_registry_context([project_root])
+
+    assert scopes == {"@acmecorp"}
+
+
+def test_yarnrc_filename_env_var_override(tmp_path: Path, monkeypatch):
+    """`YARN_RC_FILENAME` relocates which per-directory config file Yarn
+    Berry reads (project root and the home-directory global one alike) —
+    confirmed live (`YARN_RC_FILENAME=custom.yarnrc.yml yarn install`
+    genuinely read that file instead of the default `.yarnrc.yml`)."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    monkeypatch.setenv("YARN_RC_FILENAME", "custom.yarnrc.yml")
+    (tmp_path / "custom.yarnrc.yml").write_text(
+        "npmScopes:\n  acmecorp:\n    npmRegistryServer: https://npm.internal.example/\n"
+    )
+    # The default filename must NOT be consulted once relocated.
+    (tmp_path / ".yarnrc.yml").write_text("npmScopes:\n  wrongcorp:\n    npmRegistryServer: https://x/\n")
+
+    _blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert scopes == {"@acmecorp"}
+
+
+def test_yarnrc_ignores_nested_key_that_is_not_npm_registry_server(tmp_path: Path, monkeypatch):
+    """A scope block with other keys (e.g. `npmAuthToken`, a real Yarn
+    Berry key for private-registry auth) but no `npmRegistryServer` isn't
+    itself evidence of a *different* registry — only presence of the
+    registry-server key should downgrade a name to `private`."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".yarnrc.yml").write_text(
+        "npmScopes:\n  acmecorp:\n    npmAuthToken: some-token\n"
+    )
+
+    blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == set()
+
+
+def test_yarnrc_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == set()

@@ -153,15 +153,113 @@ def _npmrc_paths(project_roots: list[Path]) -> list[Path]:
     return paths
 
 
+_YARNRC_KEY_RE = re.compile(r"^([^:\s][^:]*):\s*(.*)$")
+
+
+def _yarnrc_filename() -> str:
+    # Like npm's userconfig, Yarn Berry's per-directory config filename can
+    # itself be relocated via an env var — confirmed live
+    # (`YARN_RC_FILENAME=custom.yarnrc.yml yarn install` genuinely read
+    # `custom.yarnrc.yml` instead of the default `.yarnrc.yml`, using its
+    # `npmScopes` entry to route a resolution attempt at the private
+    # registry configured there). Applies at every level Yarn searches
+    # (project directory and the home-directory global one below), same as
+    # the real algorithm.
+    return os.environ.get("YARN_RC_FILENAME") or ".yarnrc.yml"
+
+
+def _yarnrc_paths(project_roots: list[Path]) -> list[Path]:
+    # Yarn Berry (v2+) doesn't read `.npmrc` at all for its own registry
+    # config — it's a separate, YAML config file, `.yarnrc.yml`, found at
+    # the project root and (confirmed live: a `~/.yarnrc.yml` with no
+    # project-level file at all was genuinely picked up and honored,
+    # routing resolution at the registry it named) merged with a
+    # home-directory global one, mirroring `_npmrc_paths`' project+user
+    # split above but for a package manager `_npmrc_paths` never covers.
+    filename = _yarnrc_filename()
+    paths = [root / filename for root in project_roots]
+    paths.append(Path.home() / filename)
+    return paths
+
+
+def _parse_yarnrc_registries(text: str) -> tuple[bool, set[str]]:
+    """Extract (blanket_override, scope_names) from a `.yarnrc.yml`'s content.
+
+    Not a general YAML parser — Yarn always writes (and real-world files
+    consistently use) plain block-style mappings for these two keys, so a
+    small indentation-aware line walker is enough, the same "hand-parse the
+    subset of syntax that matters" approach `_npmrc_paths` already takes for
+    `.npmrc` (also not a real INI file, parsed with regex rather than
+    `configparser`). Flow-style (`npmScopes: {foo: {npmRegistryServer: ...}}`)
+    is a known gap, not worth the added complexity for a form Yarn's own
+    tooling never generates.
+
+    Confirmed live with a real `yarn install` against a throwaway local
+    registry: both a top-level `npmRegistryServer:` (blanket, every package)
+    and a `npmScopes.<name>.npmRegistryServer:` (scoped) entry are genuinely
+    honored — the resolution step visibly tried to reach the configured
+    address instead of the public npm registry in both cases, as did the
+    `YARN_NPM_REGISTRY_SERVER` env var equivalent of the blanket form
+    (checked separately in `npm_private_registry_context`, no file to parse).
+    """
+    blanket = False
+    scopes: set[str] = set()
+    in_npm_scopes = False
+    scope_key_indent: int | None = None
+    current_scope: str | None = None
+
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = _YARNRC_KEY_RE.match(stripped)
+        if not match:
+            continue
+        key, value = match.group(1).strip("\"'"), match.group(2).strip()
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+
+        if indent == 0:
+            in_npm_scopes = key == "npmScopes"
+            current_scope = None
+            scope_key_indent = None
+            if key == "npmRegistryServer" and value:
+                blanket = True
+            continue
+
+        if not in_npm_scopes:
+            continue
+
+        if scope_key_indent is None:
+            scope_key_indent = indent
+        if indent == scope_key_indent:
+            current_scope = key
+        elif current_scope and indent > scope_key_indent and key == "npmRegistryServer" and value:
+            # `npmScopes` keys are bare scope names ("acme", not "@acme") —
+            # confirmed live, `yarn install` matched a dependency's `@acme/...`
+            # name against a `npmScopes.acme` entry. `npm_scope()` returns the
+            # `@`-prefixed form, so store it that way here too for the two to
+            # compare equal in `_downgrade_if_private`.
+            scopes.add(f"@{current_scope}")
+
+    return blanket, scopes
+
+
 def npm_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[str]]:
     """Returns (blanket_override, scopes_mapped_to_a_private_registry).
 
     A scope mapping (`@acme:registry=...`) only affects packages under that
     scope, mirroring GOPRIVATE's prefix scoping fairly closely; a blanket
     `registry=` override (or `npm_config_registry` env var) affects every
-    package, like pip's extra-index-url.
+    package, like pip's extra-index-url. Yarn Berry projects can configure
+    the same thing entirely independently, via `.yarnrc.yml`/
+    `YARN_NPM_REGISTRY_SERVER` rather than `.npmrc`/`npm_config_registry` —
+    see `_parse_yarnrc_registries` and `_yarnrc_paths`.
     """
-    blanket = bool(os.environ.get("npm_config_registry") or os.environ.get("NPM_CONFIG_REGISTRY"))
+    blanket = bool(
+        os.environ.get("npm_config_registry")
+        or os.environ.get("NPM_CONFIG_REGISTRY")
+        or os.environ.get("YARN_NPM_REGISTRY_SERVER")
+    )
     scopes: set[str] = set()
     for rc_path in _npmrc_paths(project_roots):
         if not rc_path.is_file():
@@ -175,6 +273,16 @@ def npm_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[s
                 scopes.add(scope_match.group(1))
             elif _NPMRC_BLANKET_RE.match(line):
                 blanket = True
+    for rc_path in _yarnrc_paths(project_roots):
+        if not rc_path.is_file():
+            continue
+        try:
+            text = rc_path.read_text()
+        except OSError:
+            continue
+        yarn_blanket, yarn_scopes = _parse_yarnrc_registries(text)
+        blanket = blanket or yarn_blanket
+        scopes |= yarn_scopes
     return blanket, scopes
 
 
