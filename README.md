@@ -72,14 +72,14 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.23
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.24
 ```
 
 ## Usage
 
 ```bash
 # scan the current directory (and every subdirectory) for
-# requirements.txt / pyproject.toml / package.json
+# requirements.txt / pyproject.toml / package.json / Pipfile
 slopcheck
 
 # scan specific files
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.23
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.24
     slopcheck
 ```
 
@@ -107,14 +107,14 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.23
+    rev: v0.1.24
     hooks:
       - id: slopcheck
 ```
 
 Runs on any commit that touches `requirements.txt`, `pyproject.toml`,
-or `package.json`. `pre-commit` installs it into an isolated Python
-environment the first time (needs Python 3.10+, no other setup).
+`package.json`, or `Pipfile`. `pre-commit` installs it into an isolated
+Python environment the first time (needs Python 3.10+, no other setup).
 
 ## What it checks
 
@@ -122,6 +122,7 @@ environment the first time (needs Python 3.10+, no other setup).
 |---|---|
 | `requirements.txt` | PyPI |
 | `pyproject.toml` (PEP 621 or Poetry) | PyPI |
+| `Pipfile` (Pipenv) | PyPI |
 | `package.json` | npm |
 
 ## What it isn't
@@ -282,6 +283,17 @@ real-world testing against `compas-dev/compas`'s actual
 'version']` with `[tool.setuptools.dynamic] dependencies = { file =
 "requirements.txt" }` meant the pre-fix parser reported "0 dependencies
 checked" despite 5 real runtime deps and 11 dev deps.
+
+Pipenv's `Pipfile` (TOML, distinct from the JSON `Pipfile.lock`) is now
+recognized as a manifest, reading `[packages]`/`[dev-packages]` the
+same way Poetry's dependency tables are read, and skipping `git`/
+`path`/`file`-sourced entries the same way (fixed in v0.1.24 — earlier
+versions had no filename entry for `Pipfile` at all, so a Pipenv-only
+project either hit a hard "no manifest found" error, or, worse, a
+Pipenv project that also keeps tool config in a dependency-free
+`pyproject.toml` — a common real combination — was silently reported
+as "0 dependencies checked, all clean" while its actual dependencies
+in `Pipfile` went unread).
 
 ## Private/internal registries
 
