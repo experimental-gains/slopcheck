@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.22
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.23
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.22
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.23
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.22
+    rev: v0.1.23
     hooks:
       - id: slopcheck
 ```
@@ -371,6 +371,25 @@ npm's `.npmrc`, `.yarnrc.yml` is read from the project root and merged
 with a home-directory global one (`~/.yarnrc.yml`, also confirmed live);
 the filename itself can be relocated via `YARN_RC_FILENAME`, mirroring
 npm's `npm_config_userconfig`.
+
+Poetry has a third, independent private-registry mechanism: a
+`[[tool.poetry.source]]` table in `pyproject.toml` itself, consulted by
+`poetry lock`/`poetry install` regardless of any pip config or env var
+(usually unset entirely in a pure-Poetry environment). A source with no
+`priority` key, or `priority = "primary"`/`"supplemental"`, is a
+blanket override — confirmed live with a real `poetry lock` against a
+throwaway unreachable source: with no priority set, Poetry disables the
+default PyPI source outright; with `"supplemental"`, PyPI is tried
+first and the source is tried next for anything PyPI doesn't have,
+regardless of whether any dependency references it by name. `priority
+= "explicit"` is scoped instead, mirroring npm's scope mapping: it's
+only ever consulted by a dependency that opts in via its own `source =
+"<name>"` key — confirmed live that an unreferenced explicit source is
+never contacted at all, while a dependency that does reference it
+resolves only against that source. Before v0.1.23, this tool had no
+notion of Poetry's own source table, so a Poetry project's
+private-only dependencies (blanket or explicitly-sourced) were flagged
+as plain hallucinations exactly like the pre-v0.1.10 pip/npm gap above.
 
 ## requirements.txt inline comments
 

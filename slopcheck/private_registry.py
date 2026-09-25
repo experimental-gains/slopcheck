@@ -22,6 +22,13 @@ import os
 import re
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef]
+
+from .parsers import _normalize_name
+
 _PIP_DIRECTIVE_RE = re.compile(r"^(?:-i|--(?:index-url|extra-index-url|pypi-url)\b)")
 
 
@@ -284,6 +291,77 @@ def npm_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[s
         blanket = blanket or yarn_blanket
         scopes |= yarn_scopes
     return blanket, scopes
+
+
+def poetry_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[str]]:
+    """Returns (blanket, names_pinned_to_an_explicit_source).
+
+    Poetry's own `[[tool.poetry.source]]` table (https://python-poetry.org/
+    docs/repositories/#project-configuration) is a *third* private-registry
+    mechanism, entirely separate from pip's config/env vars that
+    `pip_private_index_configured` reads: a Poetry-managed project routes
+    dependency resolution through its own source list at `poetry lock`/
+    `poetry install` time, independent of any `pip.conf`/`PIP_INDEX_URL`,
+    which usually isn't set at all in a pure-Poetry environment.
+
+    Confirmed live (real `poetry lock` against a throwaway unreachable
+    `https://127.0.0.1:9/simple/` source, three priority levels): a source
+    with no `priority` key, or `priority = "primary"` or `"supplemental"`,
+    is genuinely consulted for *any* dependency not otherwise pinned to it
+    -- with no priority set at all, Poetry disables the default PyPI source
+    outright ("Adding repository ... and setting it as primary. Deactivating
+    the PyPI repository."); with `"supplemental"`, PyPI is tried first (a
+    real 404 for a nonexistent name) and the supplemental source is tried
+    next regardless. Either way, a name absent from public PyPI can still
+    resolve for a real `poetry install` -- the same blanket-override shape
+    pip's extra-index-url already gets folded into `pip_private`.
+    `priority = "explicit"` is different and scoped, mirroring npm's scope
+    mapping: confirmed live that an explicit source is *never* consulted
+    unless a specific dependency opts in via its own `source = "<name>"`
+    key (an unreferenced explicit source left the fake dependency a
+    same-shape `SolverProblemError` -- PyPI-only, `127.0.0.1:9` never even
+    contacted -- while a dependency that *did* reference it went straight to
+    that source and only that source).
+    """
+    blanket = False
+    explicit_names: set[str] = set()
+
+    for path in pyproject_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+
+        poetry = data.get("tool", {}).get("poetry", {})
+        sources = poetry.get("source", [])
+        if not isinstance(sources, list):
+            continue
+
+        explicit_source_names = set()
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            name = source.get("name")
+            if not name:
+                continue
+            if source.get("priority") == "explicit":
+                explicit_source_names.add(name)
+            else:
+                blanket = True
+
+        if not explicit_source_names:
+            continue
+
+        dep_tables = [poetry.get(section, {}) for section in ("dependencies", "dev-dependencies")]
+        dep_tables.extend(group.get("dependencies", {}) for group in poetry.get("group", {}).values())
+        for dep_table in dep_tables:
+            for dep_name, spec in dep_table.items():
+                if isinstance(spec, dict) and spec.get("source") in explicit_source_names:
+                    explicit_names.add(_normalize_name(dep_name))
+
+    return blanket, explicit_names
 
 
 def npm_scope(name: str) -> str | None:

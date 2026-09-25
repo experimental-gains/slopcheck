@@ -5,6 +5,7 @@ from slopcheck.private_registry import (
     npm_private_registry_context,
     npm_scope,
     pip_private_index_configured,
+    poetry_private_registry_context,
 )
 
 
@@ -591,3 +592,124 @@ def test_yarnrc_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
 
     assert blanket is False
     assert scopes == set()
+
+
+def test_poetry_no_source_table_is_not_private(tmp_path: Path):
+    """No `[[tool.poetry.source]]` at all: pure PyPI, matching the
+    no-config default for pip/npm above."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[tool.poetry.dependencies]\n"
+        'requests = "^2.0"\n'
+    )
+
+    blanket, explicit_names = poetry_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_poetry_source_with_no_priority_is_blanket(tmp_path: Path):
+    """A source with no `priority` key defaults to `primary` and real
+    `poetry lock` deactivates PyPI entirely in favor of it -- confirmed
+    live ("Adding repository ... and setting it as primary. Deactivating
+    the PyPI repository."). Every pypi dependency in this file should be
+    treated the same as pip's blanket extra-index-url case."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[[tool.poetry.source]]\n"
+        'name = "internal"\n'
+        'url = "https://pkgs.internal.example/simple/"\n'
+    )
+
+    blanket, _explicit_names = poetry_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_poetry_supplemental_source_is_blanket(tmp_path: Path):
+    """`priority = "supplemental"` still gets consulted for any name PyPI
+    doesn't have -- confirmed live (PyPI 404'd first, then the
+    supplemental source was tried regardless of any per-dependency
+    `source =` reference)."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[[tool.poetry.source]]\n"
+        'name = "internal"\n'
+        'url = "https://pkgs.internal.example/simple/"\n'
+        'priority = "supplemental"\n'
+    )
+
+    blanket, _explicit_names = poetry_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_poetry_explicit_source_is_scoped_not_blanket(tmp_path: Path):
+    """`priority = "explicit"` is never consulted for a dependency that
+    doesn't opt in -- confirmed live (an unreferenced explicit source
+    left the fake dependency a plain PyPI-only `SolverProblemError`,
+    `127.0.0.1:9` never contacted at all)."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[[tool.poetry.source]]\n"
+        'name = "internal"\n'
+        'url = "https://pkgs.internal.example/simple/"\n'
+        'priority = "explicit"\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'unrelated-pkg = "^1.0"\n'
+    )
+
+    blanket, explicit_names = poetry_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_poetry_dependency_pinned_to_explicit_source_is_scoped_private(tmp_path: Path):
+    """A dependency that references an explicit source by name (`source =
+    "internal"`) genuinely resolves only against it -- confirmed live
+    (went straight to the private URL, PyPI never contacted)."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[[tool.poetry.source]]\n"
+        'name = "internal"\n'
+        'url = "https://pkgs.internal.example/simple/"\n'
+        'priority = "explicit"\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'internal-only-pkg = { version = "^1.0", source = "internal" }\n'
+        'public-pkg = "^2.0"\n'
+    )
+
+    blanket, explicit_names = poetry_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == {"internal-only-pkg"}
+
+
+def test_poetry_explicit_source_scoping_covers_dependency_groups(tmp_path: Path):
+    """The same explicit-source scoping applies inside `[tool.poetry.
+    group.<name>.dependencies]`, not just the top-level table."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[[tool.poetry.source]]\n"
+        'name = "internal"\n'
+        'url = "https://pkgs.internal.example/simple/"\n'
+        'priority = "explicit"\n'
+        "\n"
+        "[tool.poetry.group.dev.dependencies]\n"
+        'internal-dev-tool = { version = "^1.0", source = "internal" }\n'
+    )
+
+    _blanket, explicit_names = poetry_private_registry_context([pyproject])
+
+    assert explicit_names == {"internal-dev-tool"}
+
+
+def test_poetry_missing_file_is_not_an_error(tmp_path: Path):
+    blanket, explicit_names = poetry_private_registry_context([tmp_path / "pyproject.toml"])
+
+    assert blanket is False
+    assert explicit_names == set()

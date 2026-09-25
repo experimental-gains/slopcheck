@@ -6,8 +6,19 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .parsers import Dependency, ManifestParseError, find_manifests, parse_manifest
-from .private_registry import npm_private_registry_context, npm_scope, pip_private_index_configured
+from .parsers import (
+    Dependency,
+    ManifestParseError,
+    _normalize_name,
+    find_manifests,
+    parse_manifest,
+)
+from .private_registry import (
+    npm_private_registry_context,
+    npm_scope,
+    pip_private_index_configured,
+    poetry_private_registry_context,
+)
 from .registries import CHECKERS, LookupResult
 
 _SEVERITY_ORDER = {"not_found": 0, "recent": 1, "error": 2, "private": 3, "ok": 4}
@@ -21,11 +32,16 @@ def _check_one(dep: Dependency) -> tuple[Dependency, LookupResult]:
 
 
 def _downgrade_if_private(
-    dep: Dependency, result: LookupResult, pip_private: bool, npm_blanket: bool, npm_scopes: set[str]
+    dep: Dependency,
+    result: LookupResult,
+    pip_private: bool,
+    npm_blanket: bool,
+    npm_scopes: set[str],
+    poetry_explicit_names: set[str],
 ) -> LookupResult:
     if result.status != "not_found":
         return result
-    if dep.ecosystem == "pypi" and pip_private:
+    if dep.ecosystem == "pypi" and (pip_private or _normalize_name(dep.name) in poetry_explicit_names):
         return LookupResult("private", _UNVERIFIED_DETAIL)
     if dep.ecosystem == "npm" and (npm_blanket or npm_scope(dep.name) in npm_scopes):
         return LookupResult("private", _UNVERIFIED_DETAIL)
@@ -48,13 +64,16 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     if not unique_deps:
         return results
 
-    pip_private = pip_private_index_configured([p for p in paths if p.name == "requirements.txt"])
+    poetry_blanket, poetry_explicit_names = poetry_private_registry_context(
+        [p for p in paths if p.name == "pyproject.toml"]
+    )
+    pip_private = pip_private_index_configured([p for p in paths if p.name == "requirements.txt"]) or poetry_blanket
     npm_project_roots = [p.parent for p in paths if p.name == "package.json"]
     npm_blanket, npm_scopes = npm_private_registry_context(npm_project_roots)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for dep, result in pool.map(_check_one, unique_deps):
-            result = _downgrade_if_private(dep, result, pip_private, npm_blanket, npm_scopes)
+            result = _downgrade_if_private(dep, result, pip_private, npm_blanket, npm_scopes, poetry_explicit_names)
             results.append((dep, result))
 
     results.sort(key=lambda pair: _SEVERITY_ORDER[pair[1].status])
