@@ -1,0 +1,24 @@
+# slopcheck
+
+> CLI that catches hallucinated/slopsquatted PyPI and npm dependency names in requirements.txt, Pipfile, and package.json before you install them, checking each name against the real registry.
+
+Use this after an LLM coding assistant adds or edits Python or npm
+dependencies. Attackers have been shown to register the exact package
+names LLMs hallucinate ahead of time ("slopsquatting"), so the first
+person to blindly install the AI's suggestion gets whatever the
+attacker put there. `slopcheck` flags names that don't exist on the
+registry at all, names that exist but were published in the last 30
+days (suspicious timing relative to an AI suggestion), and names only
+resolvable via a private/extra index (unverified, not necessarily
+hallucinated).
+
+## Install
+- [pip, from GitHub](https://github.com/experimental-gains/slopcheck#install): `pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.25` (not yet on PyPI — see the README for why the name is deliberately not fought for)
+- [pre-commit hook](https://github.com/experimental-gains/slopcheck/blob/main/.pre-commit-hooks.yaml): scan on every commit
+- [Claude Code / Copilot CLI plugin](https://github.com/experimental-gains/claude-plugins): `supplychain-guard` wraps this as an agent-triggered check
+
+## Docs
+- [README](https://github.com/experimental-gains/slopcheck/blob/main/README.md): full finding list (`not_found`/`recent`/`private`), `--fail-on` gate options, and verbatim pip/npm error strings this tool addresses
+
+## Repo
+- [Source](https://github.com/experimental-gains/slopcheck): MIT-licensed, currently at v0.1.25
