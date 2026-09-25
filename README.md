@@ -116,17 +116,20 @@ Runs on any commit that touches `requirements.txt`, `pyproject.toml`,
 `package.json`, or `Pipfile`. `pre-commit` installs it into an isolated
 Python environment the first time (needs Python 3.10+, no other setup).
 
-## Use as a Claude Code plugin
+## Use as a Claude Code / Copilot CLI plugin
 
 slopcheck also ships as a skill in the
 [`supplychain-guard`](https://github.com/experimental-gains/claude-plugins)
-Claude Code plugin, so an agent checks a new Python/npm dependency name
+plugin, so an agent checks a new Python/npm dependency name
 before installing it, not just at commit time:
 
 ```
 claude plugin marketplace add experimental-gains/claude-plugins
 claude plugin install supplychain-guard@experimental-gains-plugins
 ```
+
+Works the same way with GitHub Copilot CLI (`copilot plugin marketplace add
+experimental-gains/claude-plugins`, same install command with `copilot`).
 
 ## What it checks
 
