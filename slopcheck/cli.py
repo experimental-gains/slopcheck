@@ -48,6 +48,31 @@ def _downgrade_if_private(
     return result
 
 
+def _dedupe_key(dep: Dependency) -> tuple[str, str]:
+    """Same-package key for de-duping, using each ecosystem's own equality rule.
+
+    PyPI names are case- *and* separator-insensitive (PEP 503: `Foo-Bar`,
+    `foo_bar`, and `foo.bar` all name the same distribution), so `_normalize_name`
+    (the same PEP 503 normalizer already used for uv/Poetry source matching
+    above) is the right key there.
+
+    npm names are case-*sensitive* — confirmed live against the real registry
+    (`registry.npmjs.org/lodash` -> 200, `registry.npmjs.org/Lodash` -> 404,
+    same for a scoped `@types/node` vs `@Types/node`). Using `.lower()` for
+    npm, as this used to do unconditionally, silently collapsed a manifest's
+    correctly-cased dependency and an incorrectly-cased one (e.g. `"axios"` in
+    `dependencies` alongside a typo'd `"Axios"` in `devDependencies` — a
+    realistic LLM-hallucination shape, and one real npm install would fail on)
+    into a single entry, dropping the miscased one from the scan entirely with
+    no result at all — not flagged, not even listed as checked. npm names are
+    themselves case-preserved (no separator-equivalence rule exists), so the
+    key there is just the exact name.
+    """
+    if dep.ecosystem == "pypi":
+        return (dep.ecosystem, _normalize_name(dep.name))
+    return (dep.ecosystem, dep.name)
+
+
 def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, LookupResult]]:
     deps: list[Dependency] = []
     for path in paths:
@@ -56,8 +81,7 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     # De-dupe same name+ecosystem across files, keep first source for reporting.
     seen: dict[tuple[str, str], Dependency] = {}
     for dep in deps:
-        key = (dep.ecosystem, dep.name.lower())
-        seen.setdefault(key, dep)
+        seen.setdefault(_dedupe_key(dep), dep)
     unique_deps = list(seen.values())
 
     results: list[tuple[Dependency, LookupResult]] = []

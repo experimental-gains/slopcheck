@@ -141,6 +141,45 @@ def test_dedup_is_case_insensitive_across_files(tmp_path: Path):
     assert len(results) == 1
 
 
+def test_npm_dedup_is_case_sensitive(tmp_path: Path):
+    # Regression test for a real bug: the de-dupe key used a blanket
+    # `dep.name.lower()` for every ecosystem, but npm package names are
+    # case-*sensitive* on the real registry (confirmed live:
+    # registry.npmjs.org/lodash -> 200, registry.npmjs.org/Lodash -> 404).
+    # A manifest naming both the correct-case package and a miscased typo
+    # (a realistic LLM-hallucination shape, e.g. "axios" in `dependencies`
+    # alongside a typo'd "Axios" in `devDependencies`) used to collapse to a
+    # single entry keyed off whichever came first — silently dropping the
+    # miscased one from the scan with no result at all, not even flagged.
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {"axios": "^1.0.0"}, "devDependencies": {"Axios": "^1.0.0"}})
+    )
+
+    with patch.dict(cli.CHECKERS, {"npm": _fake_checker({"axios"})}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    names_and_status = {(dep.name, result.status) for dep, result in results}
+    assert names_and_status == {("axios", "ok"), ("Axios", "not_found")}
+
+
+def test_pypi_dedup_normalizes_separators_too(tmp_path: Path):
+    # PEP 503 normalization is case- *and* separator-insensitive (`-`/`_`/`.`
+    # are equivalent), not just case-insensitive — `some-package`,
+    # `some_package`, and `some.package` all name the same PyPI distribution.
+    # The de-dupe key needs the same `_normalize_name` PEP 503 normalizer
+    # already used elsewhere in this module (e.g. for uv/Poetry source
+    # matching), not a bare `.lower()`, to actually treat them as one entry.
+    (tmp_path / "requirements.txt").write_text("some-package\n")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "requirements.txt").write_text("some_package\n")
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"some-package"})}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert len(results) == 1
+
+
 def test_scan_sorts_by_severity_not_alphabetically(tmp_path: Path):
     # Regression test for a mutmut survivor: `results.sort(key=...)`
     # mutated to `sort(key=None)`. Since manifest de-duping keeps

@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.24
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.25
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.24
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.25
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.24
+    rev: v0.1.25
     hooks:
       - id: slopcheck
 ```
@@ -149,6 +149,25 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
   this (0xToxSec's version already covers similar ground).
 - A "recent" flag is a prompt to look closer, not proof of anything.
   Plenty of brand-new packages are legitimate.
+
+## Same package named twice, across files or sections
+
+When the same package name shows up more than once (e.g. `dependencies`
+and `devDependencies` in one `package.json`, or across two separate
+manifests), slopcheck checks it once and reports one result — but "the
+same name" is decided per-ecosystem, not with a blanket lowercase
+comparison. PyPI names are case- *and* separator-insensitive (PEP
+503: `Foo-Bar`, `foo_bar`, and `foo.bar` all name the same
+distribution), so those are treated as one entry. npm names are
+case-*sensitive* on the real registry (confirmed live:
+`registry.npmjs.org/lodash` → 200, `registry.npmjs.org/Lodash` → 404)
+— so an npm dependency listed with two different casings is two
+different (real-or-not) packages, checked and reported separately
+(fixed in v0.1.25 — earlier versions lowercased every name before
+comparing, which silently dropped a miscased duplicate — e.g. correct
+`"axios"` in `dependencies` alongside a typo'd `"Axios"` in
+`devDependencies` — from the scan entirely, with no result shown for it
+at all).
 
 ## Monorepo / workspace dependencies
 
