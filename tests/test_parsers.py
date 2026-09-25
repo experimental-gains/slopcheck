@@ -6,6 +6,7 @@ from slopcheck.parsers import (
     find_manifests,
     parse_manifest,
     parse_package_json,
+    parse_pipfile,
     parse_pyproject_toml,
     parse_requirements_txt,
 )
@@ -735,3 +736,73 @@ def test_parse_manifest_unknown_extension_raises_clean_manifest_error(tmp_path: 
         assert False, "expected ManifestParseError"
     except ManifestParseError as e:
         assert "notes.md" in str(e)
+
+
+def test_parse_pipfile(tmp_path: Path):
+    # Real-world find: Pipenv's `Pipfile` (TOML, distinct from the JSON
+    # `Pipfile.lock`) had no filename entry in `PARSERS`/`find_manifests` at
+    # all, so a Pipenv-only project was never scanned — either a loud "no
+    # manifest found" error, or, worse, a silent "0 dependencies checked,
+    # all clean" whenever any other supported-but-dependency-free manifest
+    # (e.g. a `pyproject.toml` used only for `[tool.ruff]` config, a common
+    # real combination in Pipenv projects) happened to sit alongside it.
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        """
+        [[source]]
+        name = "pypi"
+        url = "https://pypi.org/simple"
+        verify_ssl = true
+
+        [packages]
+        requests = "*"
+        flask-restplusx = "*"
+
+        [dev-packages]
+        pytest = "*"
+
+        [requires]
+        python_version = "3.11"
+        """
+    )
+    deps = parse_pipfile(pipfile)
+    names = {dep.name for dep in deps}
+    assert names == {"requests", "flask-restplusx", "pytest"}
+    assert all(dep.ecosystem == "pypi" for dep in deps)
+    assert all(dep.source == str(pipfile) for dep in deps)
+
+
+def test_parse_pipfile_skips_non_registry_sources(tmp_path: Path):
+    # Pipenv's table form lets a `[packages]`/`[dev-packages]` entry point at
+    # a git remote, a local path, or a local file/sdist instead of PyPI —
+    # the same non-registry-source situation already handled for Poetry
+    # (`_is_poetry_registry_dep`) and uv (`_is_uv_registry_source`).
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        """
+        [packages]
+        requests = "*"
+        internal-git-lib = { git = "https://example.com/internal-git-lib.git" }
+        internal-path-lib = { path = "./vendor/internal-path-lib" }
+        internal-file-lib = { file = "https://example.com/internal-file-lib.tar.gz" }
+
+        [dev-packages]
+        pytest = "*"
+        internal-dev-lib = { path = "../internal-dev-lib" }
+        """
+    )
+    names = {dep.name for dep in parse_pipfile(pipfile)}
+    assert names == {"requests", "pytest"}
+
+
+def test_find_manifests_discovers_pipfile(tmp_path: Path):
+    (tmp_path / "Pipfile").write_text('[packages]\nrequests = "*"\n')
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "Pipfile" in found
+
+
+def test_parse_manifest_routes_pipfile_to_pipfile_parser(tmp_path: Path):
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text('[packages]\nrequests = "*"\n')
+    names = {dep.name for dep in parse_manifest(pipfile)}
+    assert names == {"requests"}

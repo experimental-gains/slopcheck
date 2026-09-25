@@ -265,6 +265,66 @@ def _setuptools_dynamic_deps(data: dict, base_dir: Path) -> list[Dependency]:
     return deps
 
 
+def _is_pipfile_registry_dep(spec) -> bool:
+    """Whether a Pipfile `[packages]`/`[dev-packages]` entry resolves via a package index.
+
+    Pipenv's table form (https://pipenv.pypa.io/en/latest/specifiers/#specifying-versions-of-a-package)
+    lets an entry point at a git remote, a local path, or a local file/sdist
+    instead of PyPI — the same non-registry-source situation as Poetry's
+    git/path/url table form (`_is_poetry_registry_dep` above) and uv's
+    `[tool.uv.sources]` (`_is_uv_registry_source` above). A plain string
+    version constraint — including the bare `"*"` Pipenv always writes for
+    an unpinned `pipenv install <name>` — still resolves against PyPI and
+    should be checked; only a table with a `git`/`path`/`file` key opts out.
+    """
+    if isinstance(spec, dict):
+        return not any(key in spec for key in ("git", "path", "file"))
+    return True
+
+
+def _pipfile_deps(data: dict, section: str) -> list[str]:
+    names = []
+    for name, spec in data.get(section, {}).items():
+        if not _is_pipfile_registry_dep(spec):
+            continue
+        names.append(name)
+    return names
+
+
+def parse_pipfile(path: Path) -> list[Dependency]:
+    """Parse Pipenv's `Pipfile` (not `Pipfile.lock`).
+
+    Pipenv is still a widely-used dependency manager (Home Assistant's own
+    `pipenv`-based dev requirements, plenty of Django/Flask tutorials and
+    real projects) with a manifest format `find_manifests`/`PARSERS` never
+    recognized at all — unlike `requirements.txt`/`pyproject.toml`/
+    `package.json`, `Pipfile` has no filename match anywhere, so a
+    Pipenv-only project scanned nothing and either hit the "no manifest
+    found" error (if `Pipfile` were literally the only file in the
+    directory) or, far more dangerously and silently, reported "0
+    dependencies checked, all clean" whenever any other supported-but-
+    dependency-free manifest happened to sit alongside it — e.g. a
+    `pyproject.toml` that exists purely for `[tool.ruff]`/`[tool.black]`
+    config, a real, common combination in Pipenv-managed repos that keep
+    tool config in `pyproject.toml` while pinning actual dependencies in
+    `Pipfile`. Confirmed live: a scratch project with exactly that
+    combination — a `Pipfile` naming real (`requests`) and clearly
+    hallucinated-style packages plus a config-only `pyproject.toml` — was
+    reported as "0 dependencies checked, all clean" with exit code 0
+    before this fix, a false all-clear despite the dependencies sitting
+    right there unread.
+
+    `Pipfile` is TOML (unlike its companion `Pipfile.lock`, which is JSON),
+    so it's parsed the same way as `pyproject.toml`. Only `[packages]` and
+    `[dev-packages]` are read; `[requires]` (Python version) and `[[source]]`
+    (Pipenv's own private-index config, analogous to Poetry's
+    `[[tool.poetry.source]]`) aren't dependency names.
+    """
+    data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    names = _pipfile_deps(data, "packages") + _pipfile_deps(data, "dev-packages")
+    return [Dependency(name, "pypi", str(path)) for name in names]
+
+
 _NAME_NORMALIZE_RE = re.compile(r"[-_.]+")
 
 
@@ -464,6 +524,7 @@ PARSERS = {
     "requirements.txt": parse_requirements_txt,
     "pyproject.toml": parse_pyproject_toml,
     "package.json": parse_package_json,
+    "Pipfile": parse_pipfile,
 }
 
 
@@ -524,7 +585,8 @@ def parse_manifest(path: Path) -> list[Dependency]:
     if parser is None:
         raise ManifestParseError(
             f"{path}: don't know how to parse this file "
-            "(expected requirements.txt, pyproject.toml, package.json, or a *.txt requirements file)"
+            "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
+            "or a *.txt requirements file)"
         )
     try:
         return parser(path)

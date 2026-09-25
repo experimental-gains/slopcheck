@@ -41,6 +41,29 @@ def test_main_exits_zero_when_everything_resolves(tmp_path: Path):
     assert exit_code == 0
 
 
+def test_main_scans_pipfile_alongside_config_only_pyproject(tmp_path: Path, capsys):
+    # Regression test for a real-world find: before Pipfile support was
+    # added, `find_manifests` didn't recognize the filename "Pipfile" at
+    # all, so a Pipenv-managed project that also keeps tool config (ruff/
+    # black/etc.) in `pyproject.toml` — a common, real combination — was
+    # silently reported as "0 dependencies checked, all clean" (exit 0):
+    # `pyproject.toml` alone was found and scanned empty, while every real
+    # dependency declared only in `Pipfile` was never read at all. A
+    # Pipenv-only directory with no other manifest fared even worse
+    # visibly (a hard "no manifest found" error) but was just as unusable.
+    (tmp_path / "Pipfile").write_text(
+        '[packages]\nrequests = "*"\ntotally-made-up-pkg-9000 = "*"\n'
+    )
+    (tmp_path / "pyproject.toml").write_text('[tool.ruff]\nline-length = 100\n')
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"requests"})}):
+        exit_code = cli.main([str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "totally-made-up-pkg-9000" in out
+
+
 def test_main_errors_on_missing_path(tmp_path: Path):
     missing = tmp_path / "nope"
     assert cli.main([str(missing)]) == 2
@@ -227,7 +250,7 @@ def test_help_text_matches_source(capsys):
     assert "registry, and flag suspiciously new packages. Catches hallucinated" in normalized
     assert "('slopsquatted') package names before you install them." in normalized
     assert "Manifest files to check, or directories to search" in normalized
-    assert "(requirements.txt, pyproject.toml, package.json). Defaults to the current directory." in normalized
+    assert "(requirements.txt, pyproject.toml, package.json, Pipfile). Defaults to the current directory." in normalized
     assert "Emit machine-readable JSON instead of text." in normalized
     assert "Minimum severity that causes a non-zero exit code (default: not_found)." in normalized
     # A plain `in` check can't tell "the real text" from "the real text with
@@ -287,7 +310,7 @@ def test_no_manifests_error_message(tmp_path: Path, capsys):
     # Exact match, not `in`: a plain substring check can't distinguish this
     # from mutmut's "XX...XX"-wrapped version of the same literal, which
     # still contains the real text as a substring.
-    assert err == "slopcheck: no requirements.txt, pyproject.toml, or package.json found\n"
+    assert err == "slopcheck: no requirements.txt, pyproject.toml, package.json, or Pipfile found\n"
 
 
 def test_summary_messages_are_exact(tmp_path: Path, capsys):
