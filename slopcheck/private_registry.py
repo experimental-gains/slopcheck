@@ -32,6 +32,27 @@ from .parsers import _normalize_name
 _PIP_DIRECTIVE_RE = re.compile(r"^(?:-i|--(?:index-url|extra-index-url|pypi-url)\b)")
 
 
+def _env_ci(name: str) -> str | None:
+    """Case-insensitive environment variable lookup, npm/Yarn-only.
+
+    npm and Yarn Berry both match their env-derived config keys fully
+    case-insensitively — confirmed live with real `npm`/`yarn`:
+    `Npm_Config_Registry`, `NPM_config_Registry`,
+    `Yarn_Npm_Registry_Server`, and `Yarn_Rc_Filename` were all genuinely
+    honored, not just the plain-lowercase and SCREAMING_CASE spellings
+    this file used to check for each of these five vars. pip is the
+    opposite — confirmed live that `Pip_Index_Url` is silently ignored by
+    real `pip` (only the exact `PIP_INDEX_URL` spelling works) — so pip's
+    own env var checks elsewhere in this file are deliberately exact-case
+    and untouched by this helper.
+    """
+    target = name.lower()
+    for key, value in os.environ.items():
+        if key.lower() == target:
+            return value
+    return None
+
+
 def _pip_user_config_dir() -> Path:
     """Where pip looks for its "new" per-user config file, on Linux.
 
@@ -123,7 +144,7 @@ def _npm_global_config_paths() -> list[Path]:
     # Its location can be relocated the same way as `userconfig`, via an
     # `npm_config_globalconfig`/`NPM_CONFIG_GLOBALCONFIG` env var — confirmed
     # live, same case-insensitive resolution as userconfig.
-    override = os.environ.get("npm_config_globalconfig") or os.environ.get("NPM_CONFIG_GLOBALCONFIG")
+    override = _env_ci("npm_config_globalconfig")
     if override:
         return [Path(override)]
     # With no override, npm derives this from its own install-time global
@@ -153,7 +174,7 @@ def _npmrc_paths(project_roots: list[Path]) -> list[Path]:
     # gap below) was previously invisible here, so a legitimately
     # private-only npm dependency got reported as a plain `not_found`
     # hallucination instead of downgraded to `private`.
-    user_config = os.environ.get("npm_config_userconfig") or os.environ.get("NPM_CONFIG_USERCONFIG")
+    user_config = _env_ci("npm_config_userconfig")
     paths = [root / ".npmrc" for root in project_roots]
     paths.append(Path(user_config) if user_config else Path.home() / ".npmrc")
     paths.extend(_npm_global_config_paths())
@@ -172,7 +193,7 @@ def _yarnrc_filename() -> str:
     # registry configured there). Applies at every level Yarn searches
     # (project directory and the home-directory global one below), same as
     # the real algorithm.
-    return os.environ.get("YARN_RC_FILENAME") or ".yarnrc.yml"
+    return _env_ci("YARN_RC_FILENAME") or ".yarnrc.yml"
 
 
 def _yarnrc_paths(project_roots: list[Path]) -> list[Path]:
@@ -262,11 +283,7 @@ def npm_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[s
     `YARN_NPM_REGISTRY_SERVER` rather than `.npmrc`/`npm_config_registry` —
     see `_parse_yarnrc_registries` and `_yarnrc_paths`.
     """
-    blanket = bool(
-        os.environ.get("npm_config_registry")
-        or os.environ.get("NPM_CONFIG_REGISTRY")
-        or os.environ.get("YARN_NPM_REGISTRY_SERVER")
-    )
+    blanket = bool(_env_ci("npm_config_registry") or _env_ci("YARN_NPM_REGISTRY_SERVER"))
     scopes: set[str] = set()
     for rc_path in _npmrc_paths(project_roots):
         if not rc_path.is_file():

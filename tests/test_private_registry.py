@@ -394,6 +394,40 @@ def test_npmrc_paths_uses_uppercase_globalconfig_env_var_override(tmp_path: Path
     assert private_registry._npmrc_paths([]) == [tmp_path / ".npmrc", custom_global]
 
 
+def test_npmrc_paths_uses_mixedcase_userconfig_env_var_override(tmp_path: Path, monkeypatch):
+    """Real npm matches its env-derived config keys fully case-insensitively,
+    not just the plain-lowercase and SCREAMING_CASE spellings the two tests
+    above already cover — confirmed live (`Npm_Config_Userconfig=<file> npm
+    config get <key>` genuinely read that file). Before this fix, only those
+    two exact spellings were checked, so a mixed-case spelling (plausible
+    wherever env vars pass through case-normalizing tooling, e.g. a Windows
+    host, where env var names are inherently case-insensitive) was silently
+    ignored, sending the scan to the default `~/.npmrc` instead of the
+    relocated file a real `npm install` would actually consult."""
+    monkeypatch.delenv("npm_config_userconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
+    monkeypatch.delenv("npm_config_globalconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_GLOBALCONFIG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    custom = tmp_path / "custom.npmrc"
+    monkeypatch.setenv("Npm_Config_Userconfig", str(custom))
+
+    assert private_registry._npmrc_paths([]) == [custom, *_DEFAULT_GLOBAL_NPMRC_PATHS]
+
+
+def test_npmrc_paths_uses_mixedcase_globalconfig_env_var_override(tmp_path: Path, monkeypatch):
+    """Same case-insensitivity gap, for `globalconfig` instead of
+    `userconfig` — confirmed live the same way."""
+    monkeypatch.delenv("npm_config_userconfig", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
+    monkeypatch.delenv("npm_config_globalconfig", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    custom_global = tmp_path / "custom-global.npmrc"
+    monkeypatch.setenv("Npm_Config_Globalconfig", str(custom_global))
+
+    assert private_registry._npmrc_paths([]) == [tmp_path / ".npmrc", custom_global]
+
+
 def test_npm_private_registry_from_global_npmrc_scope(tmp_path: Path, monkeypatch):
     """End-to-end regression for the missing-global-npmrc gap: a scope
     mapping configured only via npm's global config file must be detected,
@@ -460,6 +494,23 @@ def test_npm_private_registry_from_relocated_userconfig(tmp_path: Path, monkeypa
 
     assert blanket is False
     assert scopes == {"@acmecorp"}
+
+
+def test_npm_private_registry_blanket_env_var_mixed_case(monkeypatch):
+    """Same case-insensitivity gap as the userconfig/globalconfig ones
+    above, for the blanket `npm_config_registry` env var itself — confirmed
+    live the same way (`Npm_Config_Registry=... npm config get registry`
+    genuinely returned the configured value). Before this fix, only the
+    plain-lowercase and SCREAMING_CASE spellings were checked, so this
+    would have wrongly reported no private registry configured."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.delenv("YARN_NPM_REGISTRY_SERVER", raising=False)
+    monkeypatch.setenv("Npm_Config_Registry", "https://npm.internal.example/")
+
+    blanket, _scopes = npm_private_registry_context([])
+
+    assert blanket is True
 
 
 def _clear_registry_env(monkeypatch):
@@ -563,6 +614,39 @@ def test_yarnrc_filename_env_var_override(tmp_path: Path, monkeypatch):
     _blanket, scopes = npm_private_registry_context([tmp_path])
 
     assert scopes == {"@acmecorp"}
+
+
+def test_yarnrc_filename_env_var_override_mixed_case(tmp_path: Path, monkeypatch):
+    """Same case-insensitivity gap as npm's env vars, for Yarn Berry's own
+    `YARN_RC_FILENAME` — confirmed live (`Yarn_Rc_Filename=custom.yarnrc.yml
+    yarn install` genuinely read the relocated file). Before this fix, only
+    the exact `YARN_RC_FILENAME` spelling was checked, so this would have
+    silently fallen back to the default `.yarnrc.yml` instead."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    monkeypatch.setenv("Yarn_Rc_Filename", "custom.yarnrc.yml")
+    (tmp_path / "custom.yarnrc.yml").write_text(
+        "npmScopes:\n  acmecorp:\n    npmRegistryServer: https://npm.internal.example/\n"
+    )
+
+    _blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert scopes == {"@acmecorp"}
+
+
+def test_yarnrc_env_var_triggers_blanket_mixed_case(tmp_path: Path, monkeypatch):
+    """Same gap for `YARN_NPM_REGISTRY_SERVER` — confirmed live
+    (`Yarn_Npm_Registry_Server=... yarn config get npmRegistryServer`
+    genuinely returned the configured value)."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("Yarn_Npm_Registry_Server", "https://npm.internal.example/")
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    blanket, _scopes = npm_private_registry_context([])
+
+    assert blanket is True
 
 
 def test_yarnrc_ignores_nested_key_that_is_not_npm_registry_server(tmp_path: Path, monkeypatch):

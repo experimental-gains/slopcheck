@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.27
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.28
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.27
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.28
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.27
+    rev: v0.1.28
     hooks:
       - id: slopcheck
 ```
@@ -420,6 +420,20 @@ npm hardcodes this, a common Docker/CI base) and `/usr/local/etc/npmrc`
 (npm's own documented default example, matching an official
 installer/nvm/Homebrew-on-Linux install).
 
+npm (and, as confirmed below, Yarn Berry too) actually matches every one
+of these env vars *fully* case-insensitively — any casing of
+`npm_config_registry`, `npm_config_userconfig`, or
+`npm_config_globalconfig` is genuinely honored by a real `npm install`,
+not just the plain-lowercase and SCREAMING_CASE spellings this tool
+checked for before v0.1.28. That earlier version only ever looked for
+those two spellings of each var, so a mixed-case one (plausible wherever
+env vars pass through case-normalizing tooling — a Windows host, where
+environment variable names are inherently case-insensitive, is the most
+likely real source) was silently missed, sending the scan to the wrong
+config file or ignoring a blanket private-registry override entirely —
+the same false-hallucination failure mode as every other gap in this
+section.
+
 Yarn Berry (v2 and later) doesn't read `.npmrc` for its own registry
 config at all — it has an entirely separate YAML config file,
 `.yarnrc.yml`, with a top-level `npmRegistryServer:` key for a blanket
@@ -435,7 +449,10 @@ through the configured address instead of the public npm registry. Like
 npm's `.npmrc`, `.yarnrc.yml` is read from the project root and merged
 with a home-directory global one (`~/.yarnrc.yml`, also confirmed live);
 the filename itself can be relocated via `YARN_RC_FILENAME`, mirroring
-npm's `npm_config_userconfig`.
+npm's `npm_config_userconfig` — including the same full case-insensitive
+matching (confirmed live the same way), and the same pre-v0.1.28 gap:
+only the exact `YARN_NPM_REGISTRY_SERVER`/`YARN_RC_FILENAME` spellings
+were recognized until that fix.
 
 Poetry has a third, independent private-registry mechanism: a
 `[[tool.poetry.source]]` table in `pyproject.toml` itself, consulted by
@@ -459,7 +476,7 @@ as plain hallucinations exactly like the pre-v0.1.10 pip/npm gap above.
 A `-i`/`--extra-index-url`/`--index-url` directive is now honored no
 matter which requirements-format file it's written in — not just a
 file literally named `requirements.txt` passed directly on the command
-line (fixed in v0.1.27). Before this fix, two real, common structures
+line (fixed in v0.1.28). Before this fix, two real, common structures
 fell through: a directive in a custom-named `.txt` file scanned
 directly (e.g. `requirements-prod.txt` — this tool already treats any
 `.txt` file as requirements-format, the same as pip itself doesn't
