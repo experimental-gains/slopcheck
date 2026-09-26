@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.30
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.31
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.30
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.31
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.30
+    rev: v0.1.31
     hooks:
       - id: slopcheck
 ```
@@ -508,6 +508,24 @@ blanket case is detected by comparing the first source's `url` against
 the known public PyPI URLs, not merely by whether a source table exists
 at all — otherwise every ordinary, pure-public-PyPI `Pipfile` would be
 misdetected as private and silently swallow real hallucinations in it.
+
+`uv` — now one of the most common Python dependency managers — has a
+fifth, independent private-registry mechanism: a `[[tool.uv.index]]`
+array of named index tables in `pyproject.toml`, or the same shape in a
+standalone `uv.toml` (project-level or user-level), plus
+`UV_INDEX`/`UV_DEFAULT_INDEX`/`UV_INDEX_URL`/`UV_EXTRA_INDEX_URL` env
+vars. Confirmed live with a real `uv lock` against an unreachable
+`127.0.0.1:9/simple` index (connection-refused as the tell, same
+technique used for Poetry/Pipenv above): an index with no
+`explicit = true` is consulted for *every* dependency, the same
+blanket-override shape as pip's `--extra-index-url`; an `explicit =
+true` index is only ever contacted for a dependency whose own
+`[tool.uv.sources]` entry names it via `index = "<name>"`, mirroring
+Poetry's `priority = "explicit"` — confirmed live that an unreferenced
+explicit index is never even contacted for an ordinary dependency.
+Before v0.1.31, this tool had no notion of `uv`'s index config at all,
+so a real, `uv lock`-installable private-only dependency got reported
+as a plain hallucination instead of downgraded to unverified.
 
 A `-i`/`--extra-index-url`/`--index-url` directive is now honored no
 matter which requirements-format file it's written in — not just a

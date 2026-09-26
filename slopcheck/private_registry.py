@@ -488,6 +488,115 @@ def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, s
     return blanket, explicit_names
 
 
+_UV_ENV_BLANKET_VARS = ("UV_INDEX", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL")
+
+
+def _uv_config_paths(project_roots: list[Path]) -> list[Path]:
+    # uv is a *fifth* private-registry mechanism (https://docs.astral.sh/uv/
+    # concepts/indexes/), structurally closest to Poetry's: a `[[tool.uv.
+    # index]]` array of named index tables, each either blanket (consulted
+    # for every dependency, the default when `explicit` is omitted/false) or
+    # `explicit = true` (only consulted for a dependency whose `[tool.uv.
+    # sources]` entry names it via `index = "<name>"`). Unlike Poetry, this
+    # config can live outside pyproject.toml entirely, in a standalone
+    # `uv.toml` — confirmed live (real `uv lock` against an unreachable
+    # `127.0.0.1:9` index, connection-refused as the tell, same technique
+    # `poetry_private_registry_context`/`pipfile_private_registry_context`
+    # already used): a project-root `uv.toml`, and a user-level one, are
+    # both genuinely read and honored with zero pyproject.toml involvement.
+    # `UV_CONFIG_FILE` relocates the search entirely to one explicit path,
+    # confirmed live the same way — mirrors pip's `PIP_CONFIG_FILE`.
+    override = os.environ.get("UV_CONFIG_FILE")
+    if override:
+        return [Path(override)]
+    paths = [root / "uv.toml" for root in project_roots]
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    # Confirmed live via `uv -v lock`'s own "Searching for user
+    # configuration in: ..." debug line: falls back to `~/.config/uv/
+    # uv.toml` when XDG_CONFIG_HOME is unset *or* blank, same
+    # non-blank-value rule as `_pip_user_config_dir` above.
+    base = Path(xdg) if xdg.strip() else Path.home() / ".config"
+    paths.append(base / "uv" / "uv.toml")
+    return paths
+
+
+def _uv_index_entries(data: dict) -> list[dict]:
+    entries = data.get("index", [])
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[str]]:
+    """Returns (blanket, names pinned to an explicit uv index).
+
+    Confirmed live: when a project directory has *both* a `uv.toml` and a
+    `[tool.uv]` section in its `pyproject.toml`, uv prints a warning and the
+    `uv.toml` file's `index` field wins outright — pyproject.toml's
+    `[tool.uv.index]` is not consulted at all in that case. This reads both
+    unconditionally and merges their index names rather than modeling that
+    precedence exactly, the same over-approximation `pip_private_index_
+    configured` already makes by treating a directive found in *any* file
+    as applying to the whole scan: the failure mode of wrongly downgrading
+    a name to `private` (unverified) when it wasn't actually reachable is
+    far preferable to wrongly flagging a genuinely-installable private-only
+    dependency as a hallucination.
+
+    `[tool.uv.sources]` (the per-dependency `index = "<name>"` scoping key)
+    is unaffected by a sibling `uv.toml`'s presence either way — confirmed
+    live, the warning names only `index` among `[tool.uv]`'s fields as
+    overridden — so it's always read from pyproject.toml regardless of
+    which file supplied the matching index *name*.
+    """
+    blanket = any(os.environ.get(var) for var in _UV_ENV_BLANKET_VARS)
+    explicit_index_names: set[str] = set()
+    explicit_dep_names: set[str] = set()
+
+    def _collect(entries: list[dict]) -> None:
+        nonlocal blanket
+        for entry in entries:
+            if entry.get("explicit"):
+                name = entry.get("name")
+                if name:
+                    explicit_index_names.add(name)
+            else:
+                blanket = True
+
+    project_roots = [p.parent for p in pyproject_paths]
+    for path in _uv_config_paths(project_roots):
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        _collect(_uv_index_entries(data))
+
+    for path in pyproject_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        uv = data.get("tool", {}).get("uv", {})
+        if not isinstance(uv, dict):
+            continue
+        _collect(_uv_index_entries(uv))
+
+        if not explicit_index_names:
+            continue
+        sources = uv.get("sources", {})
+        if not isinstance(sources, dict):
+            continue
+        for dep_name, spec in sources.items():
+            specs = spec if isinstance(spec, list) else [spec]
+            if any(isinstance(s, dict) and s.get("index") in explicit_index_names for s in specs):
+                explicit_dep_names.add(_normalize_name(dep_name))
+
+    return blanket, explicit_dep_names
+
+
 def npm_scope(name: str) -> str | None:
     if not name.startswith("@") or "/" not in name:
         return None

@@ -7,6 +7,7 @@ from slopcheck.private_registry import (
     pip_private_index_configured,
     pipfile_private_registry_context,
     poetry_private_registry_context,
+    uv_private_registry_context,
 )
 
 
@@ -979,3 +980,540 @@ def test_pipfile_missing_file_is_not_an_error(tmp_path: Path):
 
     assert blanket is False
     assert explicit_names == set()
+
+
+def _clear_uv_env(monkeypatch) -> None:
+    for var in (*private_registry._UV_ENV_BLANKET_VARS, "UV_CONFIG_FILE", "XDG_CONFIG_HOME"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_uv_no_config_is_not_private(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_non_explicit_index_in_pyproject_is_blanket(tmp_path: Path, monkeypatch):
+    """Confirmed live (real `uv lock` against an unreachable
+    `127.0.0.1:9/simple` index): a `[[tool.uv.index]]` entry with no
+    `explicit = true` is consulted for *every* dependency, not just ones
+    that name it via `[tool.uv.sources]` — the uv equivalent of pip's
+    `--extra-index-url` and Poetry's non-explicit source."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+    assert explicit_names == set()
+
+
+def test_uv_explicit_index_is_scoped_not_blanket(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg", "requests"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = { index = "internal" }\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_uv_explicit_index_name_match_is_normalized(tmp_path: Path, monkeypatch):
+    """`[tool.uv.sources]` keys follow the same PEP 503 name equivalence as
+    every other pyproject.toml dependency table — confirmed against uv's own
+    real behavior elsewhere in this codebase (`_normalize_name`'s docstring
+    in parsers.py)."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["Totally_Fake.Pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        '"totally-fake-pkg" = { index = "internal" }\n'
+    )
+
+    _blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_uv_explicit_index_unreferenced_by_any_source_is_not_scoped(tmp_path: Path, monkeypatch):
+    """Confirmed live: a real `uv lock` never even connects to an explicit
+    index's URL for a dependency that doesn't opt into it via `[tool.uv.
+    sources]` — mirrors Poetry's `priority = "explicit"` behavior."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["requests"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_env_var_is_blanket(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("UV_EXTRA_INDEX_URL", "https://pypi.internal.example/simple")
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_uv_config_paths_uses_xdg_config_home_when_set(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    xdg = tmp_path / "customxdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+    assert private_registry._uv_config_paths([]) == [xdg / "uv" / "uv.toml"]
+
+
+def test_uv_config_paths_ignores_blank_xdg_config_home(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+
+    assert private_registry._uv_config_paths([]) == [tmp_path / ".config" / "uv" / "uv.toml"]
+
+
+def test_uv_private_index_from_standalone_uv_toml(tmp_path: Path, monkeypatch):
+    """The uv equivalent of the project-`Pipfile`/`pyproject.toml`-only
+    signals above: uv's own private-index config can live entirely outside
+    pyproject.toml, in a sibling `uv.toml` — confirmed live (real `uv lock`
+    with zero `[tool.uv]` section in pyproject.toml at all)."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n')
+    (tmp_path / "uv.toml").write_text(
+        '[[index]]\nname = "internal"\nurl = "https://pypi.internal.example/simple"\n'
+    )
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_uv_config_file_env_var_overrides_search(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    override = tmp_path / "somewhere" / "uv.toml"
+    override.parent.mkdir()
+    monkeypatch.setenv("UV_CONFIG_FILE", str(override))
+
+    assert private_registry._uv_config_paths([tmp_path]) == [override]
+
+
+def test_uv_explicit_index_declared_only_in_uv_toml_still_scopes_pyproject_sources(
+    tmp_path: Path, monkeypatch
+):
+    """The index table and the `[tool.uv.sources]` reference to it can live
+    in different files — confirmed live (`uv.toml`'s `index` field wins over
+    a sibling pyproject.toml's `[tool.uv.index]` when both exist, but
+    `[tool.uv.sources]` is read from pyproject.toml regardless)."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = { index = "internal" }\n'
+    )
+    (tmp_path / "uv.toml").write_text(
+        '[[index]]\nname = "internal"\nurl = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+    )
+
+    assert uv_private_registry_context([pyproject]) == (False, {"totally-fake-pkg"})
+
+
+def test_uv_index_entries_ignores_non_list_value(tmp_path: Path, monkeypatch):
+    """A malformed `index = "not-a-table-array"` (real uv itself hard-errors
+    on this shape, "invalid type: string, expected a sequence", confirmed
+    live) shouldn't crash the scan — same defensive shape as
+    `poetry_private_registry_context`'s `isinstance(sources, list)` check."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["requests"]\n\n[tool.uv]\nindex = "oops"\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_toml_malformed_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+    (tmp_path / "uv.toml").write_text("this is not valid toml [[[")
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_missing_pyproject_file_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    blanket, explicit_names = uv_private_registry_context([tmp_path / "pyproject.toml"])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_pyproject_malformed_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("this is not valid toml [[[")
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_tool_uv_section_not_a_table_is_ignored(tmp_path: Path, monkeypatch):
+    """A `[tool] uv = "oops"` (uv itself would ignore/error on this shape
+    too) shouldn't crash the scan."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n\n[tool]\nuv = "oops"\n')
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_sources_not_a_table_is_ignored(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv]\n"
+        'sources = "oops"\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_config_paths_falls_back_to_home_when_xdg_unset(tmp_path: Path, monkeypatch):
+    """Distinct from the blank-string case above: `XDG_CONFIG_HOME` simply
+    absent from the environment must hit the same `~/.config` fallback as
+    when it's present-but-blank."""
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("UV_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert private_registry._uv_config_paths([]) == [tmp_path / ".config" / "uv" / "uv.toml"]
+
+
+def test_uv_toml_bom_is_stripped(tmp_path: Path, monkeypatch):
+    """Same BOM-tolerance guarantee as every other TOML/JSON reader in this
+    codebase (see parsers.py's utf-8-sig comment) — a real, valid file some
+    editors/tools write."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+    (tmp_path / "uv.toml").write_bytes(
+        b"\xef\xbb\xbf" + b'[[index]]\nname = "internal"\nurl = "https://pypi.internal.example/simple"\n'
+    )
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_uv_pyproject_bom_is_stripped(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_bytes(
+        b"\xef\xbb\xbf"
+        + b'[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        + b"\n[[tool.uv.index]]\n"
+        + b'name = "internal"\n'
+        + b'url = "https://pypi.internal.example/simple"\n'
+    )
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_uv_config_missing_file_does_not_abort_remaining_paths(tmp_path: Path, monkeypatch):
+    """A missing `uv.toml` candidate for one project root must not stop the
+    scan from reading a real one at another root — this scans multiple
+    project roots in a single call the same way a monorepo would."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / "pyproject.toml").write_text('[project]\nname = "a"\ndependencies = ["requests"]\n')
+    (root_b / "pyproject.toml").write_text('[project]\nname = "b"\ndependencies = ["requests"]\n')
+    # root_a gets no uv.toml at all; root_b's is the only real one.
+    (root_b / "uv.toml").write_text('[[index]]\nname = "internal"\nurl = "https://pypi.internal.example/simple"\n')
+
+    blanket, _explicit_names = uv_private_registry_context(
+        [root_a / "pyproject.toml", root_b / "pyproject.toml"]
+    )
+
+    assert blanket is True
+
+
+def test_uv_pyproject_missing_file_does_not_abort_remaining_paths(tmp_path: Path, monkeypatch):
+    """Distinct from the uv.toml-missing case above: here the `pyproject.
+    toml` path itself doesn't exist (e.g. a stale path from an earlier scan
+    step) — the second loop over `pyproject_paths` must still read a real
+    one later in the list rather than stopping."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    missing = tmp_path / "missing" / "pyproject.toml"
+    good = tmp_path / "good" / "pyproject.toml"
+    good.parent.mkdir()
+    good.write_text(
+        '[project]\nname = "good"\ndependencies = ["requests"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+
+    blanket, _explicit_names = uv_private_registry_context([missing, good])
+
+    assert blanket is True
+
+
+def test_uv_config_malformed_file_does_not_abort_remaining_paths(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / "pyproject.toml").write_text('[project]\nname = "a"\ndependencies = ["requests"]\n')
+    (root_b / "pyproject.toml").write_text('[project]\nname = "b"\ndependencies = ["requests"]\n')
+    (root_a / "uv.toml").write_text("this is not valid toml [[[")
+    (root_b / "uv.toml").write_text('[[index]]\nname = "internal"\nurl = "https://pypi.internal.example/simple"\n')
+
+    blanket, _explicit_names = uv_private_registry_context(
+        [root_a / "pyproject.toml", root_b / "pyproject.toml"]
+    )
+
+    assert blanket is True
+
+
+def test_uv_pyproject_malformed_file_does_not_abort_remaining_paths(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    broken = tmp_path / "broken" / "pyproject.toml"
+    broken.parent.mkdir()
+    broken.write_text("this is not valid toml [[[")
+    good = tmp_path / "good" / "pyproject.toml"
+    good.parent.mkdir()
+    good.write_text(
+        '[project]\nname = "good"\ndependencies = ["requests"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+
+    blanket, _explicit_names = uv_private_registry_context([broken, good])
+
+    assert blanket is True
+
+
+def test_uv_pyproject_non_dict_uv_section_does_not_abort_remaining_paths(tmp_path: Path, monkeypatch):
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    oops = tmp_path / "oops" / "pyproject.toml"
+    oops.parent.mkdir()
+    oops.write_text('[project]\nname = "oops"\ndependencies = ["requests"]\n\n[tool]\nuv = "oops"\n')
+    good = tmp_path / "good" / "pyproject.toml"
+    good.parent.mkdir()
+    good.write_text(
+        '[project]\nname = "good"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = { index = "internal" }\n'
+    )
+
+    _blanket, explicit_names = uv_private_registry_context([oops, good])
+
+    assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_uv_no_explicit_index_yet_does_not_abort_remaining_paths(tmp_path: Path, monkeypatch):
+    """The first pyproject.toml in the list declares no uv config at all
+    (`explicit_index_names` is still empty when its own sources-check would
+    run), so it takes the "skip this file's sources" branch — that must
+    move on to the next file, not stop the whole scan."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    plain = tmp_path / "plain" / "pyproject.toml"
+    plain.parent.mkdir()
+    plain.write_text('[project]\nname = "plain"\ndependencies = ["requests"]\n')
+    good = tmp_path / "good" / "pyproject.toml"
+    good.parent.mkdir()
+    good.write_text(
+        '[project]\nname = "good"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = { index = "internal" }\n'
+    )
+
+    _blanket, explicit_names = uv_private_registry_context([plain, good])
+
+    assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_uv_non_dict_sources_does_not_abort_remaining_paths(tmp_path: Path, monkeypatch):
+    """The first pyproject.toml declares its own explicit index (so
+    `explicit_index_names` is already non-empty by the time its `sources`
+    field is checked) but sets `sources` to a malformed non-table value —
+    that must skip just this file's sources, not the rest of the scan."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    malformed = tmp_path / "malformed" / "pyproject.toml"
+    malformed.parent.mkdir()
+    malformed.write_text(
+        '[project]\nname = "malformed"\ndependencies = ["requests"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "other"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv]\n"
+        'sources = "oops"\n'
+    )
+    good = tmp_path / "good" / "pyproject.toml"
+    good.parent.mkdir()
+    good.write_text(
+        '[project]\nname = "good"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = { index = "internal" }\n'
+    )
+
+    _blanket, explicit_names = uv_private_registry_context([malformed, good])
+
+    assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_uv_sources_list_form_scopes_when_any_entry_matches(tmp_path: Path, monkeypatch):
+    """`[tool.uv.sources]` entries can be a list of per-platform/marker
+    source tables (uv's documented multi-source syntax, already relied on
+    by `_is_uv_registry_source` in parsers.py) rather than a single table —
+    confirmed real by that existing code's own justification. Mirrors the
+    Poetry multiple-constraints gap this codebase already found and fixed
+    (see `poetry_private_registry_context`'s docstring)."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = [\n'
+        '  { index = "internal", marker = "sys_platform == \'linux\'" },\n'
+        '  { git = "https://example.com/other.git", marker = "sys_platform == \'darwin\'" },\n'
+        "]\n"
+    )
+
+    _blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_uv_sources_list_form_ignores_non_table_entries(tmp_path: Path, monkeypatch):
+    """A list-form `[tool.uv.sources]` entry mixing a non-table item with a
+    real one (malformed, but shouldn't crash the scan) — same defensive
+    shape as `poetry_private_registry_context`'s `isinstance(source, dict)`
+    check inside its own sources loop."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = [\n'
+        '  "not-a-table",\n'
+        '  { index = "internal" },\n'
+        "]\n"
+    )
+
+    _blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert explicit_names == {"totally-fake-pkg"}
