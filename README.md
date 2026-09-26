@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.29
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.30
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.29
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.30
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.29
+    rev: v0.1.30
     hooks:
       - id: slopcheck
 ```
@@ -487,6 +487,27 @@ explicit source — the resolver genuinely contacted it for the matching
 platform variant, the same real resolution as the single-table case
 above, but this tool reported the name as a plain, unscoped
 hallucination candidate instead.
+
+Pipenv's `Pipfile` has a fourth, structurally different mechanism: a
+`[[source]]` array with no `priority` key at all. Confirmed live with a
+real `pipenv lock` (Pipenv 2026.8.0): with no per-package `index` key, a
+dependency resolves only against the *first* `[[source]]` entry in file
+order — not the entry conventionally named `"pypi"` specifically, and
+not every source — so a project whose first source's `url` has been
+replaced with a private mirror (keeping the usual `name = "pypi"`
+Pipenv itself always writes) routes every undecorated dependency there,
+the same blanket-override shape as pip's `--index-url`. A dependency's
+own `index = "<name>"` key scopes it to exactly that named source
+instead, mirroring Poetry's `source = "<name>"` — confirmed live going
+straight to the private URL, the public source never contacted for
+that name. Before v0.1.30, this tool had no notion of Pipenv's source
+array at all, so either form got a private-only dependency flagged as a
+plain hallucination. Because `[[source]]` is mandatory boilerplate every
+real `Pipfile` carries (unlike Poetry's optional source table), the
+blanket case is detected by comparing the first source's `url` against
+the known public PyPI URLs, not merely by whether a source table exists
+at all — otherwise every ordinary, pure-public-PyPI `Pipfile` would be
+misdetected as private and silently swallow real hallucinations in it.
 
 A `-i`/`--extra-index-url`/`--index-url` directive is now honored no
 matter which requirements-format file it's written in — not just a

@@ -18,6 +18,7 @@ from .private_registry import (
     npm_private_registry_context,
     npm_scope,
     pip_private_index_configured,
+    pipfile_private_registry_context,
     poetry_private_registry_context,
 )
 from .registries import CHECKERS, LookupResult
@@ -38,11 +39,11 @@ def _downgrade_if_private(
     pip_private: bool,
     npm_blanket: bool,
     npm_scopes: set[str],
-    poetry_explicit_names: set[str],
+    pypi_explicit_names: set[str],
 ) -> LookupResult:
     if result.status != "not_found":
         return result
-    if dep.ecosystem == "pypi" and (pip_private or _normalize_name(dep.name) in poetry_explicit_names):
+    if dep.ecosystem == "pypi" and (pip_private or _normalize_name(dep.name) in pypi_explicit_names):
         return LookupResult("private", _UNVERIFIED_DETAIL)
     if dep.ecosystem == "npm" and (npm_blanket or npm_scope(dep.name) in npm_scopes):
         return LookupResult("private", _UNVERIFIED_DETAIL)
@@ -92,6 +93,10 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     poetry_blanket, poetry_explicit_names = poetry_private_registry_context(
         [p for p in paths if p.name == "pyproject.toml"]
     )
+    pipfile_blanket, pipfile_explicit_names = pipfile_private_registry_context(
+        [p for p in paths if p.name == "Pipfile"]
+    )
+    pypi_explicit_names = poetry_explicit_names | pipfile_explicit_names
     # A `-i`/`--extra-index-url` directive can live in any requirements-format
     # file pip itself would read for this scan, not just a top-level file
     # literally named "requirements.txt": `parse_manifest`'s own `.txt`
@@ -108,13 +113,13 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     for p in paths:
         if p.suffix == ".txt":
             txt_paths |= requirements_txt_files_touched(p)
-    pip_private = pip_private_index_configured(sorted(txt_paths)) or poetry_blanket
+    pip_private = pip_private_index_configured(sorted(txt_paths)) or poetry_blanket or pipfile_blanket
     npm_project_roots = [p.parent for p in paths if p.name == "package.json"]
     npm_blanket, npm_scopes = npm_private_registry_context(npm_project_roots)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for dep, result in pool.map(_check_one, unique_deps):
-            result = _downgrade_if_private(dep, result, pip_private, npm_blanket, npm_scopes, poetry_explicit_names)
+            result = _downgrade_if_private(dep, result, pip_private, npm_blanket, npm_scopes, pypi_explicit_names)
             results.append((dep, result))
 
     results.sort(key=lambda pair: _SEVERITY_ORDER[pair[1].status])

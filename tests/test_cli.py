@@ -291,6 +291,56 @@ def test_pip_private_directive_in_custom_named_txt_file(tmp_path: Path, monkeypa
     assert by_name["acmecorp-internal-widget"] == "private"
 
 
+def test_pipfile_scoped_index_downgrades_not_found_to_private(tmp_path: Path):
+    # Regression test for a real gap: slopcheck had zero awareness of
+    # Pipenv's own `[[source]]`/`index=` private-registry mechanism at all
+    # (unlike pip's extra-index-url, npm's scope mapping, and Poetry's
+    # explicit sources, which all already downgrade). A dependency pinned to
+    # a non-default named source via `index = "internal"` genuinely resolves
+    # against only that source (confirmed live, real `pipenv lock`), so it
+    # should be reported "private", not a plain hallucination.
+    (tmp_path / "Pipfile").write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "\n"
+        "[[source]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "\n"
+        "[packages]\n"
+        'acmecorp-internal-widget = { version = "*", index = "internal" }\n'
+        'public-pkg = "*"\n'
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"public-pkg"})}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+    assert by_name["public-pkg"] == "ok"
+
+
+def test_pipfile_default_source_replaced_downgrades_undecorated_dep(tmp_path: Path):
+    # The blanket form: the conventionally-named "pypi" source's own `url`
+    # replaced by a private mirror routes *every* undecorated dependency
+    # there (confirmed live) — same shape as pip's --index-url override.
+    (tmp_path / "Pipfile").write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "\n"
+        "[packages]\n"
+        'acmecorp-internal-widget = "*"\n'
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+
+
 def test_npm_blanket_registry_downgrades_unscoped_package(tmp_path: Path, monkeypatch):
     # Regression test for a mutmut survivor: `scan()` passing `None`
     # instead of the real `npm_blanket` value to `_downgrade_if_private`

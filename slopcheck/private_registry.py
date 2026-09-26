@@ -395,6 +395,99 @@ def poetry_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, 
     return blanket, explicit_names
 
 
+_PUBLIC_PYPI_URLS = {
+    "https://pypi.org/simple",
+    "http://pypi.org/simple",
+    "https://pypi.python.org/simple",
+    "http://pypi.python.org/simple",
+}
+
+
+def _is_public_pypi_url(url: str) -> bool:
+    return url.rstrip("/").lower() in _PUBLIC_PYPI_URLS
+
+
+def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, set[str]]:
+    """Returns (blanket, names_pinned_to_a_non-default_source), for Pipenv's `Pipfile`.
+
+    Pipenv's own `[[source]]` array (https://pipenv.pypa.io/en/latest/
+    specifiers/#specifying-package-indexes) is a *fourth* private-registry
+    mechanism, structurally different from Poetry's `[[tool.poetry.source]]`
+    that `poetry_private_registry_context` already covers: there's no
+    `priority` key at all. Confirmed live (real `pipenv lock` under Pipenv
+    2026.8.0, three source arrangements, watching for the `127.0.0.1:9`
+    connection attempt as the tell — same unreachable-source technique
+    `poetry_private_registry_context` used):
+
+    - With no per-package `index` key, a dependency resolves *only* against
+      the first `[[source]]` entry in file order — not the entry named
+      "pypi" specifically, and not every source. A second, later source
+      (even an unreachable one) is never contacted for that dependency.
+      This means a project whose first source's `url` is a private mirror
+      (a real, common pattern: an org replacing the default entirely,
+      keeping the conventional `name = "pypi"` pipenv itself always
+      generates) routes *every* undecorated dependency there — the same
+      blanket-override shape as pip's `--index-url` and Poetry's
+      non-explicit sources.
+    - A dependency spec's own `index = "<name>"` key scopes it to exactly
+      that named source and no other — confirmed live going straight to
+      the private URL, the public-PyPI-named source never contacted for
+      that name at all, mirroring Poetry's `source = "<name>"` explicit
+      scoping.
+
+    Before this, slopcheck had zero awareness of this mechanism at all —
+    neither the blanket nor the per-package form — so any Pipfile-based
+    project using either pattern got every genuinely-private-only name it
+    named reported as a plain `not_found` hallucination instead of
+    downgraded to `private`.
+
+    `[[source]]` is mandatory boilerplate every real Pipfile carries (Pipenv
+    always writes one, unlike Poetry's optional source table), so unlike
+    `poetry_private_registry_context` this can't treat "any source present"
+    as the private signal — that would flag the overwhelming majority of
+    ordinary, pure-public-PyPI Pipfiles as blanket-private and silently
+    swallow every real hallucination in them. The first source's `url` value
+    itself is compared against the known public-PyPI URLs instead.
+    """
+    blanket = False
+    explicit_names: set[str] = set()
+
+    for path in pipfile_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+
+        sources = data.get("source", [])
+        if not isinstance(sources, list) or not sources:
+            continue
+
+        source_urls = {
+            source["name"]: source.get("url", "")
+            for source in sources
+            if isinstance(source, dict) and source.get("name")
+        }
+
+        default_url = sources[0].get("url", "") if isinstance(sources[0], dict) else ""
+        if default_url and not _is_public_pypi_url(default_url):
+            blanket = True
+
+        for section in ("packages", "dev-packages"):
+            for dep_name, spec in data.get(section, {}).items():
+                if not isinstance(spec, dict):
+                    continue
+                index_name = spec.get("index")
+                if not index_name:
+                    continue
+                index_url = source_urls.get(index_name, "")
+                if index_url and not _is_public_pypi_url(index_url):
+                    explicit_names.add(_normalize_name(dep_name))
+
+    return blanket, explicit_names
+
+
 def npm_scope(name: str) -> str | None:
     if not name.startswith("@") or "/" not in name:
         return None

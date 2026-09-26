@@ -5,6 +5,7 @@ from slopcheck.private_registry import (
     npm_private_registry_context,
     npm_scope,
     pip_private_index_configured,
+    pipfile_private_registry_context,
     poetry_private_registry_context,
 )
 
@@ -828,6 +829,153 @@ def test_poetry_multiple_constraints_dependency_scoped_to_explicit_source(tmp_pa
 
 def test_poetry_missing_file_is_not_an_error(tmp_path: Path):
     blanket, explicit_names = poetry_private_registry_context([tmp_path / "pyproject.toml"])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_pipfile_no_source_table_is_not_private(tmp_path: Path):
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text('[packages]\nrequests = "*"\n')
+
+    blanket, explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_pipfile_default_public_pypi_source_is_not_private(tmp_path: Path):
+    """The exact boilerplate `pipenv` itself writes into every generated
+    Pipfile -- confirming this ordinary, extremely common case doesn't get
+    swept up as blanket-private just because a `[[source]]` table exists at
+    all (unlike Poetry's optional source table, Pipenv's is mandatory)."""
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "verify_ssl = true\n"
+        "\n"
+        "[packages]\n"
+        'requests = "*"\n'
+    )
+
+    blanket, explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_pipfile_first_source_replaced_is_blanket(tmp_path: Path):
+    """Confirmed live (`pipenv lock` under Pipenv 2026.8.0): with the
+    conventionally-named "pypi" source's own `url` replaced by a private
+    mirror, a plain undecorated dependency resolves only against it --
+    `127.0.0.1:9` genuinely contacted, real pypi.org never touched."""
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://127.0.0.1:9/simple"\n'
+        "verify_ssl = true\n"
+        "\n"
+        "[packages]\n"
+        'internal-only-pkg = "*"\n'
+    )
+
+    blanket, _explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is True
+
+
+def test_pipfile_default_is_the_first_listed_source_not_the_one_named_pypi(tmp_path: Path):
+    """Confirmed live: Pipenv's default index for an undecorated dependency
+    is whichever `[[source]]` table comes first in file order -- not the
+    entry named "pypi" specifically. A later, differently-ordered public
+    "pypi" entry does not make this file non-private."""
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "internal"\n'
+        'url = "https://127.0.0.1:9/simple"\n'
+        "\n"
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "\n"
+        "[packages]\n"
+        'internal-only-pkg = "*"\n'
+    )
+
+    blanket, _explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is True
+
+
+def test_pipfile_dependency_pinned_to_named_index_is_scoped_private(tmp_path: Path):
+    """Confirmed live: a dependency's own `index = "<name>"` key routes it
+    to exactly that source -- the public "pypi" source is never contacted
+    for that name -- while an undecorated sibling dependency still resolves
+    against the public default and stays out of `explicit_names`."""
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "\n"
+        "[[source]]\n"
+        'name = "internal"\n'
+        'url = "https://127.0.0.1:9/simple"\n'
+        "\n"
+        "[packages]\n"
+        'internal-only-pkg = { version = "*", index = "internal" }\n'
+        'public-pkg = "*"\n'
+    )
+
+    blanket, explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is False
+    assert explicit_names == {"internal-only-pkg"}
+
+
+def test_pipfile_dev_packages_also_scoped(tmp_path: Path):
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "\n"
+        "[[source]]\n"
+        'name = "internal"\n'
+        'url = "https://127.0.0.1:9/simple"\n'
+        "\n"
+        "[dev-packages]\n"
+        'internal-dev-tool = { version = "*", index = "internal" }\n'
+    )
+
+    _blanket, explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert explicit_names == {"internal-dev-tool"}
+
+
+def test_pipfile_index_key_naming_the_public_source_is_not_scoped_private(tmp_path: Path):
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "\n"
+        "[packages]\n"
+        'ordinary-pkg = { version = "*", index = "pypi" }\n'
+    )
+
+    blanket, explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_pipfile_missing_file_is_not_an_error(tmp_path: Path):
+    blanket, explicit_names = pipfile_private_registry_context([tmp_path / "Pipfile"])
 
     assert blanket is False
     assert explicit_names == set()
