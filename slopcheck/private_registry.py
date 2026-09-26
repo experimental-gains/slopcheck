@@ -597,6 +597,56 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
     return blanket, explicit_dep_names
 
 
+def pdm_private_registry_context(pyproject_paths: list[Path]) -> bool:
+    """Whether PDM, run for real, would consult something beyond public PyPI.
+
+    PDM's own `[[tool.pdm.source]]` array (https://pdm-project.org/en/latest/
+    usage/config/#specify-another-index-for-installation) is a *sixth*
+    private-registry mechanism, structurally its own: unlike Poetry's
+    `priority = "explicit"` or Pipenv's per-dependency `index =` key, PDM
+    scopes a source to specific packages via glob patterns on the source
+    itself (`include_packages`/`exclude_packages`), not a field on the
+    dependency spec.
+
+    Confirmed live (real `pdm lock` under PDM 2.29.2, against an unreachable
+    `http://127.0.0.1:9/simple` source, connection-refused as the tell): a
+    source with no `include_packages`/`exclude_packages` at all is genuinely
+    contacted for *every* dependency, alongside the default PyPI index — the
+    same blanket-by-default shape as Pipenv's `[[source]]`. Setting
+    `include_packages = ["myorg-*"]` alone does **not** stop the source from
+    still being consulted for a name that doesn't match the pattern (verified
+    live: a fake, non-matching name still hit `127.0.0.1:9`) — reading PDM's
+    own `filtered_sources`/`_source_preference` (pdm/utils.py), a pattern
+    match only *adds* an exclusive claim on matching names (excluding PyPI
+    for those), it doesn't *remove* the source's default candidacy for
+    everything else. The only way a source stops applying to a given name is
+    an `exclude_packages` pattern that matches it.
+
+    That per-name exclude carve-out isn't modeled here — it would need every
+    already-parsed dependency name threaded through just to except a rarely-
+    used pattern, for a still-safe failure mode (over-reporting `private`
+    instead of a genuine hallucination) this file already accepts elsewhere
+    (see `uv_private_registry_context`). So this mirrors `pip_private_index_
+    configured`'s plain whole-scan bool: any `[[tool.pdm.source]]` table
+    present at all means PDM could resolve a name beyond public PyPI for this
+    scan.
+    """
+    for path in pyproject_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        pdm = data.get("tool", {}).get("pdm", {})
+        if not isinstance(pdm, dict):
+            continue
+        sources = pdm.get("source", [])
+        if isinstance(sources, list) and any(isinstance(s, dict) for s in sources):
+            return True
+    return False
+
+
 def npm_scope(name: str) -> str | None:
     if not name.startswith("@") or "/" not in name:
         return None

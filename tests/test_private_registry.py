@@ -4,6 +4,7 @@ from slopcheck import private_registry
 from slopcheck.private_registry import (
     npm_private_registry_context,
     npm_scope,
+    pdm_private_registry_context,
     pip_private_index_configured,
     pipfile_private_registry_context,
     poetry_private_registry_context,
@@ -1517,3 +1518,69 @@ def test_uv_sources_list_form_ignores_non_table_entries(tmp_path: Path, monkeypa
     _blanket, explicit_names = uv_private_registry_context([pyproject])
 
     assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_pdm_no_source_table_is_not_private(tmp_path: Path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+
+    assert pdm_private_registry_context([pyproject]) is False
+
+
+def test_pdm_plain_source_is_blanket(tmp_path: Path):
+    """Confirmed live (`pdm lock` under PDM 2.29.2, real unreachable
+    `127.0.0.1:9` source): a `[[tool.pdm.source]]` table with no
+    include_packages/exclude_packages is genuinely contacted for every
+    dependency, not just ones matching some pattern."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n'
+        "\n[[tool.pdm.source]]\n"
+        'name = "private"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_include_packages_does_not_narrow_the_blanket(tmp_path: Path):
+    """Confirmed live: setting `include_packages` on a source does not stop
+    it from also being consulted for a name that doesn't match the pattern
+    — PDM's own `_source_preference` only *adds* an exclusive claim for
+    matching names, it never removes the source's default candidacy for
+    everything else. Still blanket, same as the plain case above."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n'
+        "\n[[tool.pdm.source]]\n"
+        'name = "private"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        'include_packages = ["myorg-*"]\n'
+    )
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_missing_file_is_not_an_error(tmp_path: Path):
+    assert pdm_private_registry_context([tmp_path / "pyproject.toml"]) is False
+
+
+def test_pdm_malformed_toml_is_not_an_error(tmp_path: Path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("not valid toml [[[")
+
+    assert pdm_private_registry_context([pyproject]) is False
+
+
+def test_pdm_non_dict_tool_pdm_section_is_ignored(tmp_path: Path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\n\n[tool]\npdm = "not-a-table"\n')
+
+    assert pdm_private_registry_context([pyproject]) is False
+
+
+def test_pdm_non_list_source_is_ignored(tmp_path: Path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\n\n[tool.pdm]\nsource = "not-a-list"\n')
+
+    assert pdm_private_registry_context([pyproject]) is False

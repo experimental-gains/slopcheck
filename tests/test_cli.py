@@ -341,6 +341,31 @@ def test_pipfile_default_source_replaced_downgrades_undecorated_dep(tmp_path: Pa
     assert by_name["acmecorp-internal-widget"] == "private"
 
 
+def test_pdm_source_downgrades_not_found_to_private(tmp_path: Path):
+    # Regression test for a real gap: slopcheck had zero awareness of PDM's
+    # own `[[tool.pdm.source]]` private-registry mechanism at all (a sixth
+    # mechanism, alongside pip/npm/Yarn/Poetry/Pipenv/uv already handled) —
+    # a PEP 621 pyproject.toml naming a private source is a genuine, common
+    # PDM project shape, and a dependency only resolvable there used to be
+    # reported as a plain `not_found` hallucination instead of downgraded to
+    # `private` (confirmed live, real `pdm lock`).
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\n'
+        'name = "x"\n'
+        'dependencies = ["acmecorp-internal-widget", "public-pkg"]\n'
+        "\n[[tool.pdm.source]]\n"
+        'name = "private"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"public-pkg"})}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+    assert by_name["public-pkg"] == "ok"
+
+
 def test_npm_blanket_registry_downgrades_unscoped_package(tmp_path: Path, monkeypatch):
     # Regression test for a mutmut survivor: `scan()` passing `None`
     # instead of the real `npm_blanket` value to `_downgrade_if_private`

@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.31
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.32
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.31
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.32
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.31
+    rev: v0.1.32
     hooks:
       - id: slopcheck
 ```
@@ -523,9 +523,26 @@ true` index is only ever contacted for a dependency whose own
 `[tool.uv.sources]` entry names it via `index = "<name>"`, mirroring
 Poetry's `priority = "explicit"` — confirmed live that an unreferenced
 explicit index is never even contacted for an ordinary dependency.
-Before v0.1.31, this tool had no notion of `uv`'s index config at all,
+Before v0.1.32, this tool had no notion of `uv`'s index config at all,
 so a real, `uv lock`-installable private-only dependency got reported
 as a plain hallucination instead of downgraded to unverified.
+
+PDM has a sixth, independently-shaped mechanism: a `[[tool.pdm.source]]`
+array in `pyproject.toml`, scoped to specific packages via glob patterns
+(`include_packages`/`exclude_packages`) on the source itself rather than
+a field on the dependency spec. Confirmed live with a real `pdm lock`
+(PDM 2.29.2) against an unreachable `127.0.0.1:9/simple` source: a
+source with no include/exclude patterns is genuinely contacted for
+*every* dependency, the same blanket shape as Pipenv's source array —
+and, unlike Poetry's `priority = "explicit"` or uv's `explicit = true`,
+setting `include_packages` alone does *not* stop the source from also
+being consulted for a name that doesn't match the pattern (verified
+live: a non-matching fake name still hit the unreachable source), since
+PDM's own pattern matching only grants matching names an *exclusive*
+claim rather than excluding non-matching ones. Before v0.1.32, this tool
+had no notion of PDM's source table at all, so a PDM project's
+private-only dependencies got reported as a plain hallucination instead
+of downgraded to unverified.
 
 A `-i`/`--extra-index-url`/`--index-url` directive is now honored no
 matter which requirements-format file it's written in — not just a

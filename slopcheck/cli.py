@@ -17,6 +17,7 @@ from .parsers import (
 from .private_registry import (
     npm_private_registry_context,
     npm_scope,
+    pdm_private_registry_context,
     pip_private_index_configured,
     pipfile_private_registry_context,
     poetry_private_registry_context,
@@ -100,6 +101,7 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     uv_blanket, uv_explicit_names = uv_private_registry_context(
         [p for p in paths if p.name == "pyproject.toml"]
     )
+    pdm_blanket = pdm_private_registry_context([p for p in paths if p.name == "pyproject.toml"])
     pypi_explicit_names = poetry_explicit_names | pipfile_explicit_names | uv_explicit_names
     # A `-i`/`--extra-index-url` directive can live in any requirements-format
     # file pip itself would read for this scan, not just a top-level file
@@ -117,7 +119,13 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     for p in paths:
         if p.suffix == ".txt":
             txt_paths |= requirements_txt_files_touched(p)
-    pip_private = pip_private_index_configured(sorted(txt_paths)) or poetry_blanket or pipfile_blanket or uv_blanket
+    pip_private = (
+        pip_private_index_configured(sorted(txt_paths))
+        or poetry_blanket
+        or pipfile_blanket
+        or uv_blanket
+        or pdm_blanket
+    )
     npm_project_roots = [p.parent for p in paths if p.name == "package.json"]
     npm_blanket, npm_scopes = npm_private_registry_context(npm_project_roots)
 
