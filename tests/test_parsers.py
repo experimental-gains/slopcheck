@@ -516,6 +516,46 @@ def test_parse_pyproject_dependency_groups(tmp_path: Path):
     assert names == {"requests", "pytest", "time-machine", "mkdocs"}
 
 
+def test_parse_pyproject_skips_self_referential_extras(tmp_path: Path):
+    # PEP 621 explicitly supports a "self-referential extra": an entry in
+    # [project.optional-dependencies] (or [dependency-groups]) that names
+    # the *current* project with a different combination of its own extras
+    # instead of an external dependency, so an "all"/"everything" extra
+    # doesn't need a hand-maintained copy of every other extra
+    # (https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#self-referential-extras).
+    # Confirmed real and current against PDM's own pyproject.toml, which
+    # does exactly this shape: [project.optional-dependencies] template =
+    # ["pdm[copier,cookiecutter]"] / all = ["pdm[keyring,template]"], and
+    # [dependency-groups] test = ["pdm[pytest]", ...] — naming "pdm" itself
+    # in three different extras/groups, not an external dependency. Before
+    # this fix the self-reference matched _REQ_LINE_RE like any other spec
+    # and got checked against PyPI as if it were a real dependency — a
+    # spurious "not found"/"recent" flag waiting to happen for the exact
+    # case this pattern exists for: a brand-new, not-yet-published project
+    # using its own umbrella extra during early development. The project
+    # name is matched PEP 503-normalized (case/separator-insensitive,
+    # "Demo-Tool" vs "demo_tool") since [project.name] is itself normalized
+    # that way.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "Demo-Tool"
+        dependencies = ["requests"]
+
+        [project.optional-dependencies]
+        gui = ["PyQt5"]
+        cli = ["click"]
+        all = ["demo_tool[gui,cli]"]
+
+        [dependency-groups]
+        test = ["pytest", "demo-tool[cli]"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "PyQt5", "click", "pytest"}
+
+
 def test_parse_pyproject_setuptools_dynamic_dependencies(tmp_path: Path):
     # setuptools' own dynamic-metadata mechanism
     # (https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html#dynamic-metadata):

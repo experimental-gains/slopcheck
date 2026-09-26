@@ -459,10 +459,43 @@ def _uv_non_registry_names(data: dict) -> set[str]:
     }
 
 
+def _self_referential_name(data: dict) -> set[str]:
+    """The project's own PEP 503-normalized name, if declared, as a skip-set.
+
+    PEP 621 explicitly supports a "self-referential extra" — an entry in
+    `[project.optional-dependencies]` (or, just as commonly in practice, in
+    PEP 735 `[dependency-groups]`) that names the *current* project with a
+    different combination of its own extras, e.g. `all = ["your-project-
+    name[gui, cli]"]`, so an "all"/"test"-style umbrella extra doesn't need
+    its own hand-maintained copy of every other extra's dependency list
+    (https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#self-referential-extras,
+    "most package managers now support this kind of extra, including pip,
+    uv, ..."). Confirmed real and current, not hypothetical: PDM's own
+    `pyproject.toml` does exactly this — `[project.optional-dependencies]
+    template = ["pdm[copier,cookiecutter]"]` / `all = ["pdm[keyring,
+    template]"]`, and `[dependency-groups] test = ["pdm[pytest]", ...]` —
+    naming `pdm` itself, not an external dependency. Before this fix,
+    `_REQ_LINE_RE` matched that self-reference like any other spec and
+    added `pdm` as a PyPI dependency to check, which happens to be
+    harmless for an already-published project like PDM but is a real
+    false positive waiting to happen for the much more common case this
+    pattern is aimed at: a brand-new, not-yet-published project using its
+    own `all`/`everything` extra during early development, where checking
+    its own name against PyPI can only ever produce a spurious "not found"
+    or "recent" flag on a name that was never an external dependency (and
+    isn't a slopsquatting risk) in the first place. Matched PEP 503-
+    normalized (case- and separator-insensitive), the same rule used
+    throughout this module for name equality, since `[project.name]` is
+    itself normalized that way.
+    """
+    name = data.get("project", {}).get("name")
+    return {_normalize_name(name)} if isinstance(name, str) else set()
+
+
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
     data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     raw_specs = _pep621_deps(data) + _poetry_deps(data) + _dependency_groups_deps(data)
-    skip_names = _uv_non_registry_names(data)
+    skip_names = _uv_non_registry_names(data) | _self_referential_name(data)
     deps = []
     for spec in raw_specs:
         match = _REQ_LINE_RE.match(spec.strip())

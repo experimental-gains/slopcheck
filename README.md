@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.32
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.33
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.32
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.33
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.32
+    rev: v0.1.33
     hooks:
       - id: slopcheck
 ```
@@ -285,6 +285,26 @@ An `{include-group = "other"}` entry references another group instead of
 naming a package and is correctly skipped rather than treated as a
 dependency name; the group it points at still gets checked on its own
 turn through the table.
+
+A [self-referential extra](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#self-referential-extras)
+— an entry in `[project.optional-dependencies]` or `[dependency-groups]`
+that names the *current* project with a different combination of its
+own extras (e.g. `all = ["your-project-name[gui, cli]"]`, so an
+"all"/"everything" extra doesn't need a hand-maintained copy of every
+other extra's dependencies) — is no longer checked against the registry
+as if it were an external dependency (fixed in v0.1.33). Confirmed real
+and current against PDM's own `pyproject.toml`, which uses exactly this
+shape in three places: `[project.optional-dependencies] template =
+["pdm[copier,cookiecutter]"]` / `all = ["pdm[keyring,template]"]`, and
+`[dependency-groups] test = ["pdm[pytest]", ...]` — naming `pdm` itself,
+not an external package. Earlier versions matched that self-reference
+like any other spec and checked the project's own name against PyPI —
+harmless for an already-published project like PDM, but a spurious
+"not found"/"recent" flag waiting to happen for the case this pattern
+exists for: a brand-new, not-yet-published project using its own
+umbrella extra while still in early development. The project's own name
+is matched case/separator-insensitively (PEP 503), the same rule
+`[project.name]` itself is normalized under.
 
 A `requirements.txt` line starting with `-r`/`--requirement` (pip's
 nested-requirements-file directive, resolved relative to the file that
@@ -523,7 +543,7 @@ true` index is only ever contacted for a dependency whose own
 `[tool.uv.sources]` entry names it via `index = "<name>"`, mirroring
 Poetry's `priority = "explicit"` — confirmed live that an unreferenced
 explicit index is never even contacted for an ordinary dependency.
-Before v0.1.32, this tool had no notion of `uv`'s index config at all,
+Before v0.1.33, this tool had no notion of `uv`'s index config at all,
 so a real, `uv lock`-installable private-only dependency got reported
 as a plain hallucination instead of downgraded to unverified.
 
@@ -539,7 +559,7 @@ setting `include_packages` alone does *not* stop the source from also
 being consulted for a name that doesn't match the pattern (verified
 live: a non-matching fake name still hit the unreachable source), since
 PDM's own pattern matching only grants matching names an *exclusive*
-claim rather than excluding non-matching ones. Before v0.1.32, this tool
+claim rather than excluding non-matching ones. Before v0.1.33, this tool
 had no notion of PDM's source table at all, so a PDM project's
 private-only dependencies got reported as a plain hallucination instead
 of downgraded to unverified.
