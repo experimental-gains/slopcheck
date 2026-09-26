@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.26
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.27
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.26
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.27
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.26
+    rev: v0.1.27
     hooks:
       - id: slopcheck
 ```
@@ -455,6 +455,20 @@ resolves only against that source. Before v0.1.23, this tool had no
 notion of Poetry's own source table, so a Poetry project's
 private-only dependencies (blanket or explicitly-sourced) were flagged
 as plain hallucinations exactly like the pre-v0.1.10 pip/npm gap above.
+
+A `-i`/`--extra-index-url`/`--index-url` directive is now honored no
+matter which requirements-format file it's written in — not just a
+file literally named `requirements.txt` passed directly on the command
+line (fixed in v0.1.27). Before this fix, two real, common structures
+fell through: a directive in a custom-named `.txt` file scanned
+directly (e.g. `requirements-prod.txt` — this tool already treats any
+`.txt` file as requirements-format, the same as pip itself doesn't
+care about the filename), and a directive living only in a file pulled
+in via `-r`/`--requirement` (e.g. a shared `base.txt` that every
+per-environment file `-r`s into, carrying the index config so it isn't
+duplicated in each one — confirmed live against real pip that a
+directive placed either way applies to the whole install). Both used
+to get every private-only dependency flagged as a plain hallucination.
 
 ## requirements.txt inline comments
 

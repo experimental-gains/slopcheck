@@ -10,6 +10,7 @@ from slopcheck.parsers import (
     parse_pyproject_toml,
     parse_requirements_txt,
     parse_setup_cfg,
+    requirements_txt_files_touched,
 )
 
 
@@ -666,6 +667,31 @@ def test_parse_requirements_txt_recurses_into_nested_r_file(tmp_path: Path):
 
     names = {dep.name for dep in parse_requirements_txt(prod)}
     assert names == {"django", "totally-fake-hallucinated-pkg", "gunicorn"}
+
+
+def test_requirements_txt_files_touched_includes_nested_r_file(tmp_path: Path):
+    # `private_registry.pip_private_index_configured` needs the full set of
+    # files pip would actually read for this scan (including anything
+    # reached only via `-r`) to detect a `-i`/`--extra-index-url` directive
+    # that lives in a nested file with no dependency lines of its own —
+    # such a file never shows up as any `Dependency.source`, so this can't
+    # be derived from `parse_requirements_txt`'s return value alone.
+    sub = tmp_path / "requirements"
+    sub.mkdir()
+    (sub / "base.txt").write_text("--extra-index-url https://pypi.internal.example/simple\n")
+    prod = sub / "production.txt"
+    prod.write_text("-r base.txt\ngunicorn==22.0\n")
+
+    touched = requirements_txt_files_touched(prod)
+    assert touched == {prod.resolve(), (sub / "base.txt").resolve()}
+
+
+def test_requirements_txt_files_touched_r_cycle_does_not_hang_or_crash(tmp_path: Path):
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("-r b.txt\npkg-a==1.0\n")
+    b.write_text("-r a.txt\npkg-b==1.0\n")
+    assert requirements_txt_files_touched(a) == {a.resolve(), b.resolve()}
 
 
 def test_parse_requirements_txt_recurses_into_long_form_requirement_flag(tmp_path: Path):

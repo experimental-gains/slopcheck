@@ -230,8 +230,8 @@ def test_scan_sorts_by_severity_not_alphabetically(tmp_path: Path):
 
 
 def test_pip_private_only_triggered_by_a_requirements_txt_directive_line(tmp_path: Path, monkeypatch):
-    # Regression test for mutmut survivors that mutated the `p.name ==
-    # "requirements.txt"` filter (to `!=`, or to a wrong-case string) —
+    # Regression test for mutmut survivors that mutated the `.txt` suffix
+    # filter (to something that never matches, or to a wrong-case string) —
     # earlier tests only exercised this via env vars, which bypass the
     # path filter entirely (pip_private_index_configured checks env vars
     # unconditionally, regardless of what paths are passed in).
@@ -244,6 +244,48 @@ def test_pip_private_only_triggered_by_a_requirements_txt_directive_line(tmp_pat
 
     with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set()), "npm": _fake_checker({"left-pad"})}):
         results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+
+
+def test_pip_private_directive_in_nested_dash_r_file_with_no_deps_of_its_own(tmp_path: Path, monkeypatch):
+    # Regression test: pip applies a `-i`/`--extra-index-url` directive found
+    # in a file reached only via `-r`/`--requirement` to the whole install
+    # (confirmed live against real pip) — a real, common structure where a
+    # shared base file carries the index config and per-environment files
+    # `-r` into it. `base.txt` here has no dependency lines of its own, so
+    # it never shows up as any `Dependency`'s `source` — the only way to
+    # find its directive is to actually walk the `-r` chain, not infer it
+    # from parsed dependencies.
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    (tmp_path / "base.txt").write_text("--extra-index-url https://pypi.internal.example/simple\n")
+    (tmp_path / "requirements.txt").write_text("-r base.txt\nacmecorp-internal-widget\n")
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+
+
+def test_pip_private_directive_in_custom_named_txt_file(tmp_path: Path, monkeypatch):
+    # Regression test: `parse_manifest`'s own `.txt` fallback treats any
+    # `*.txt` file passed directly as requirements-format (pip itself
+    # doesn't care about the filename either), so a directive there must be
+    # honored the same as in a file literally named "requirements.txt".
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    custom = tmp_path / "requirements-prod.txt"
+    custom.write_text("--extra-index-url https://pypi.internal.example/simple\nacmecorp-internal-widget\n")
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan([custom])
 
     by_name = {dep.name: result.status for dep, result in results}
     assert by_name["acmecorp-internal-widget"] == "private"

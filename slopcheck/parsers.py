@@ -102,17 +102,34 @@ _CONSTRAINT_FILE_RE = re.compile(r"^(?:-c|--constraint)\s+(?P<target>.+?)\s*$")
 
 
 def parse_requirements_txt(path: Path) -> list[Dependency]:
-    return _parse_requirements_txt(path, set())
+    deps, _touched = _parse_requirements_txt(path, set())
+    return deps
 
 
-def _parse_requirements_txt(path: Path, seen: set[Path]) -> list[Dependency]:
+def requirements_txt_files_touched(path: Path) -> set[Path]:
+    """Every requirements-format file `path` pulls in via `-r`/`--requirement`, plus itself.
+
+    Needed to detect a `-i`/`--extra-index-url` directive: pip applies one
+    found in *any* file reached this way to the whole install (confirmed
+    live), not just the literal file named on the command line. A
+    directive-only file (e.g. a shared `base.txt` that just sets the index
+    and is pulled in by every per-environment file via `-r`, with no
+    dependency lines of its own) never shows up as any `Dependency`'s
+    `source` — so the caller needs this file set directly rather than
+    inferring it from already-parsed dependencies.
+    """
+    _deps, touched = _parse_requirements_txt(path, set())
+    return touched
+
+
+def _parse_requirements_txt(path: Path, seen: set[Path]) -> tuple[list[Dependency], set[Path]]:
     resolved = path.resolve()
     if resolved in seen:
         # A `-r` cycle (directly or indirectly self-referencing). Real pip
         # would also loop forever on this, but there's no reason to hang or
         # crash a name-existence check over a malformed requirements file —
         # just stop recursing into an already-visited file.
-        return []
+        return [], seen
     seen = seen | {resolved}
 
     try:
@@ -136,7 +153,8 @@ def _parse_requirements_txt(path: Path, seen: set[Path]) -> list[Dependency]:
         req_match = _REQ_FILE_RE.match(line)
         if req_match:
             target = path.parent / req_match.group("target")
-            deps.extend(_parse_requirements_txt(target, seen))
+            nested_deps, seen = _parse_requirements_txt(target, seen)
+            deps.extend(nested_deps)
             continue
         if _CONSTRAINT_FILE_RE.match(line) or line.startswith(("-e ", "--")):
             continue
@@ -145,7 +163,7 @@ def _parse_requirements_txt(path: Path, seen: set[Path]) -> list[Dependency]:
         match = _REQ_LINE_RE.match(line)
         if match:
             deps.append(Dependency(match.group("name"), "pypi", str(path)))
-    return deps
+    return deps, seen
 
 
 def _pep621_deps(data: dict) -> list[str]:
@@ -256,12 +274,12 @@ def _setuptools_dynamic_deps(data: dict, base_dir: Path) -> list[Dependency]:
 
     if "dependencies" in dynamic_fields:
         for filename in _setuptools_dynamic_files(setuptools_dynamic.get("dependencies")):
-            deps.extend(_parse_requirements_txt(base_dir / filename, set()))
+            deps.extend(parse_requirements_txt(base_dir / filename))
 
     if "optional-dependencies" in dynamic_fields:
         for group_spec in setuptools_dynamic.get("optional-dependencies", {}).values():
             for filename in _setuptools_dynamic_files(group_spec):
-                deps.extend(_parse_requirements_txt(base_dir / filename, set()))
+                deps.extend(parse_requirements_txt(base_dir / filename))
 
     return deps
 

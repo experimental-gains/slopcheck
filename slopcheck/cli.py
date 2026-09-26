@@ -12,6 +12,7 @@ from .parsers import (
     _normalize_name,
     find_manifests,
     parse_manifest,
+    requirements_txt_files_touched,
 )
 from .private_registry import (
     npm_private_registry_context,
@@ -91,7 +92,23 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     poetry_blanket, poetry_explicit_names = poetry_private_registry_context(
         [p for p in paths if p.name == "pyproject.toml"]
     )
-    pip_private = pip_private_index_configured([p for p in paths if p.name == "requirements.txt"]) or poetry_blanket
+    # A `-i`/`--extra-index-url` directive can live in any requirements-format
+    # file pip itself would read for this scan, not just a top-level file
+    # literally named "requirements.txt": `parse_manifest`'s own `.txt`
+    # fallback treats any `*.txt` scan target as requirements-format, and
+    # pip follows `-r`/`--requirement` into files never passed in `paths` at
+    # all (a real, common structure — e.g. a shared `base.txt` carrying the
+    # index directive that per-environment files `-r` into). Confirmed live
+    # with real pip that a directive in either place applies to the whole
+    # install. `requirements_txt_files_touched` walks the same `-r` chain the
+    # dependency parser already follows, so it finds a directive-only nested
+    # file too (one with no dependency lines of its own, so it would never
+    # show up as any `Dependency`'s `source`).
+    txt_paths: set[Path] = set()
+    for p in paths:
+        if p.suffix == ".txt":
+            txt_paths |= requirements_txt_files_touched(p)
+    pip_private = pip_private_index_configured(sorted(txt_paths)) or poetry_blanket
     npm_project_roots = [p.parent for p in paths if p.name == "package.json"]
     npm_blanket, npm_scopes = npm_private_registry_context(npm_project_roots)
 

@@ -13,7 +13,7 @@ resolvable via a private/extra index (unverified, not necessarily
 hallucinated).
 
 ## Install
-- [pip, from GitHub](https://github.com/experimental-gains/slopcheck#install): `pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.26` (not yet on PyPI — see the README for why the name is deliberately not fought for)
+- [pip, from GitHub](https://github.com/experimental-gains/slopcheck#install): `pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.27` (not yet on PyPI — see the README for why the name is deliberately not fought for)
 - [pre-commit hook](https://github.com/experimental-gains/slopcheck/blob/main/.pre-commit-hooks.yaml): scan on every commit
 - [Claude Code / Copilot CLI plugin](https://github.com/experimental-gains/claude-plugins): `supplychain-guard` wraps this as an agent-triggered check
 
@@ -21,4 +21,4 @@ hallucinated).
 - [README](https://github.com/experimental-gains/slopcheck/blob/main/README.md): full finding list (`not_found`/`recent`/`private`), `--fail-on` gate options, and verbatim pip/npm error strings this tool addresses
 
 ## Repo
-- [Source](https://github.com/experimental-gains/slopcheck): MIT-licensed, currently at v0.1.26
+- [Source](https://github.com/experimental-gains/slopcheck): MIT-licensed, currently at v0.1.27
