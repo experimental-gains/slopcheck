@@ -5,6 +5,7 @@ whole point is checking whether the name exists in a registry at all.
 """
 from __future__ import annotations
 
+import configparser
 import json
 import os
 import re
@@ -325,6 +326,66 @@ def parse_pipfile(path: Path) -> list[Dependency]:
     return [Dependency(name, "pypi", str(path)) for name in names]
 
 
+def _setup_cfg_list_deps(value: str, path: Path) -> list[Dependency]:
+    deps = []
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = _strip_inline_comment(line)
+        if not line or "://" in line:
+            continue
+        match = _REQ_LINE_RE.match(line)
+        if match:
+            deps.append(Dependency(match.group("name"), "pypi", str(path)))
+    return deps
+
+
+def parse_setup_cfg(path: Path) -> list[Dependency]:
+    """Parse setuptools' legacy `setup.cfg` `[options]`/`[options.extras_require]`.
+
+    Plenty of real, currently-maintained packages still declare dependencies
+    this way instead of PEP 621's `[project.dependencies]` — confirmed via a
+    live GitHub code search (25k+ hits for `install_requires` in `setup.cfg`)
+    and two concrete current examples: `RDFLib/sparqlwrapper` and
+    `rm-hull/luma.oled`. Both matter more than an ordinary missing-format
+    gap because of *what else* is in their repos: PEP 518 requires any
+    project pip can build from source to ship a `pyproject.toml` with a
+    `[build-system]` table, so both repos have one — but neither has
+    migrated its actual dependency list to `[project.dependencies]`, so
+    their `pyproject.toml` has no `[project]` table at all. Before this fix,
+    `find_manifests` matched that `pyproject.toml` (a real, supported
+    filename), `parse_pyproject_toml` correctly found zero PEP 621/Poetry/
+    uv/dependency-groups deps in it (there are none), and `setup.cfg` itself
+    had no `PARSERS` entry — so the *only* manifest found for either project
+    was one that legitimately contains no dependencies. Same silent
+    "0 dependencies checked, all clean" false-all-clear failure mode as the
+    `Pipfile` gap this tool already fixed, not a loud "no manifest found"
+    error that would at least surface the gap.
+
+    Uses `configparser` (the same library setuptools itself parses this
+    format with) rather than hand-rolled line splitting, with interpolation
+    turned off: setup.cfg's `[options.extras_require]` supports
+    `%(other_extra)s` back-references between extras, and resolving that
+    correctly would mean re-implementing configparser's own interpolation;
+    turning it off just means a `%(...)s` reference doesn't match
+    `_REQ_LINE_RE` (starts with `%`, not a name character) and is skipped
+    like any other unresolvable spec, rather than either resolving nothing
+    at all or raising on a reference this simple parser doesn't need to
+    understand.
+    """
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(path.read_text(encoding="utf-8-sig"), source=str(path))
+
+    deps = []
+    if parser.has_option("options", "install_requires"):
+        deps.extend(_setup_cfg_list_deps(parser.get("options", "install_requires"), path))
+    if parser.has_section("options.extras_require"):
+        for value in parser["options.extras_require"].values():
+            deps.extend(_setup_cfg_list_deps(value, path))
+    return deps
+
+
 _NAME_NORMALIZE_RE = re.compile(r"[-_.]+")
 
 
@@ -525,6 +586,7 @@ PARSERS = {
     "pyproject.toml": parse_pyproject_toml,
     "package.json": parse_package_json,
     "Pipfile": parse_pipfile,
+    "setup.cfg": parse_setup_cfg,
 }
 
 
@@ -586,9 +648,9 @@ def parse_manifest(path: Path) -> list[Dependency]:
         raise ManifestParseError(
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
-            "or a *.txt requirements file)"
+            "setup.cfg, or a *.txt requirements file)"
         )
     try:
         return parser(path)
-    except (json.JSONDecodeError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError, UnicodeDecodeError, configparser.Error) as e:
         raise ManifestParseError(f"{path}: couldn't parse as {path.name} ({e})") from e

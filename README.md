@@ -72,14 +72,14 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.25
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.26
 ```
 
 ## Usage
 
 ```bash
 # scan the current directory (and every subdirectory) for
-# requirements.txt / pyproject.toml / package.json / Pipfile
+# requirements.txt / pyproject.toml / package.json / Pipfile / setup.cfg
 slopcheck
 
 # scan specific files
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.25
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.26
     slopcheck
 ```
 
@@ -107,14 +107,15 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.25
+    rev: v0.1.26
     hooks:
       - id: slopcheck
 ```
 
 Runs on any commit that touches `requirements.txt`, `pyproject.toml`,
-`package.json`, or `Pipfile`. `pre-commit` installs it into an isolated
-Python environment the first time (needs Python 3.10+, no other setup).
+`package.json`, `Pipfile`, or `setup.cfg`. `pre-commit` installs it into
+an isolated Python environment the first time (needs Python 3.10+, no
+other setup).
 
 ## Use as a Claude Code / Copilot CLI plugin
 
@@ -138,6 +139,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | `requirements.txt` | PyPI |
 | `pyproject.toml` (PEP 621 or Poetry) | PyPI |
 | `Pipfile` (Pipenv) | PyPI |
+| `setup.cfg` (setuptools) | PyPI |
 | `package.json` | npm |
 
 ## What it isn't
@@ -328,6 +330,23 @@ Pipenv project that also keeps tool config in a dependency-free
 `pyproject.toml` — a common real combination — was silently reported
 as "0 dependencies checked, all clean" while its actual dependencies
 in `Pipfile` went unread).
+
+setuptools' legacy `setup.cfg` `[options] install_requires`/
+`[options.extras_require]` is now recognized as a manifest too (fixed
+in v0.1.26 — earlier versions had no filename entry for `setup.cfg` at
+all). This one matters more than an ordinary missing-format gap:
+[PEP 518](https://peps.python.org/pep-0518/) requires any project pip
+can build from source to ship a `pyproject.toml` with a `[build-system]`
+table, so plenty of real, currently-maintained packages that never
+migrated their dependency list to `[project.dependencies]` have a
+`pyproject.toml` anyway — one containing only `[build-system]` (and
+maybe `[tool.*]` config), no `[project]` table at all. Confirmed live
+against `RDFLib/sparqlwrapper` and `rm-hull/luma.oled`, both real,
+current GitHub repos in exactly that shape: before this fix, their
+`pyproject.toml` was the only manifest found, and it legitimately
+parses to zero dependencies — a silent "0 dependencies checked, all
+clean" false-all-clear, same failure shape as the `Pipfile` gap above,
+while every dependency actually declared in `setup.cfg` went unread.
 
 ## Private/internal registries
 

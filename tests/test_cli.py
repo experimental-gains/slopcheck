@@ -64,6 +64,38 @@ def test_main_scans_pipfile_alongside_config_only_pyproject(tmp_path: Path, caps
     assert "totally-made-up-pkg-9000" in out
 
 
+def test_main_scans_setup_cfg_alongside_build_system_only_pyproject(tmp_path: Path, capsys):
+    # Regression test for a real-world find: PEP 518 requires any
+    # pip-buildable project to ship a pyproject.toml with a [build-system]
+    # table, so plenty of packages that never migrated their dependency
+    # list off setup.cfg's `[options] install_requires` have one anyway —
+    # confirmed live against RDFLib/sparqlwrapper and rm-hull/luma.oled,
+    # both real, current GitHub repos with exactly this combination. Before
+    # setup.cfg support was added, `find_manifests` matched the
+    # `pyproject.toml` (a real, supported filename), `parse_pyproject_toml`
+    # correctly found zero deps in it (there genuinely are none under
+    # [project]), and `setup.cfg` was invisible — so the only manifest
+    # found for a project like this was one that legitimately contains no
+    # dependencies, producing the same silent "0 dependencies checked, all
+    # clean" false-all-clear the Pipfile fix above closed for Pipenv.
+    (tmp_path / "setup.cfg").write_text(
+        "[options]\n"
+        "install_requires =\n"
+        "    requests>=2.0\n"
+        "    totally-made-up-pkg-9000\n"
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["setuptools", "wheel"]\nbuild-backend = "setuptools.build_meta"\n'
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"requests"})}):
+        exit_code = cli.main([str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "totally-made-up-pkg-9000" in out
+
+
 def test_main_errors_on_missing_path(tmp_path: Path):
     missing = tmp_path / "nope"
     assert cli.main([str(missing)]) == 2
@@ -289,7 +321,10 @@ def test_help_text_matches_source(capsys):
     assert "registry, and flag suspiciously new packages. Catches hallucinated" in normalized
     assert "('slopsquatted') package names before you install them." in normalized
     assert "Manifest files to check, or directories to search" in normalized
-    assert "(requirements.txt, pyproject.toml, package.json, Pipfile). Defaults to the current directory." in normalized
+    assert (
+        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg). "
+        "Defaults to the current directory." in normalized
+    )
     assert "Emit machine-readable JSON instead of text." in normalized
     assert "Minimum severity that causes a non-zero exit code (default: not_found)." in normalized
     # A plain `in` check can't tell "the real text" from "the real text with
@@ -349,7 +384,7 @@ def test_no_manifests_error_message(tmp_path: Path, capsys):
     # Exact match, not `in`: a plain substring check can't distinguish this
     # from mutmut's "XX...XX"-wrapped version of the same literal, which
     # still contains the real text as a substring.
-    assert err == "slopcheck: no requirements.txt, pyproject.toml, package.json, or Pipfile found\n"
+    assert err == "slopcheck: no requirements.txt, pyproject.toml, package.json, Pipfile, or setup.cfg found\n"
 
 
 def test_summary_messages_are_exact(tmp_path: Path, capsys):

@@ -9,6 +9,7 @@ from slopcheck.parsers import (
     parse_pipfile,
     parse_pyproject_toml,
     parse_requirements_txt,
+    parse_setup_cfg,
 )
 
 
@@ -805,4 +806,67 @@ def test_parse_manifest_routes_pipfile_to_pipfile_parser(tmp_path: Path):
     pipfile = tmp_path / "Pipfile"
     pipfile.write_text('[packages]\nrequests = "*"\n')
     names = {dep.name for dep in parse_manifest(pipfile)}
+    assert names == {"requests"}
+
+
+def test_parse_setup_cfg(tmp_path: Path):
+    # Real-world find: setuptools' legacy `setup.cfg` `[options]
+    # install_requires` had no filename entry in `PARSERS`/`find_manifests`
+    # at all — confirmed live against RDFLib/sparqlwrapper and
+    # rm-hull/luma.oled, two real, current packages that declare their
+    # actual dependencies this way while still shipping a `pyproject.toml`
+    # containing only `[build-system]` (required by PEP 518 for pip to
+    # build them at all, but not itself a dependency declaration). Before
+    # this fix, that `pyproject.toml` was the only manifest `find_manifests`
+    # recognized, and it legitimately parses to zero dependencies — a
+    # silent "0 dependencies checked, all clean" false-all-clear, the same
+    # failure shape as the `Pipfile` gap fixed above.
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text(
+        "[metadata]\n"
+        "name = example\n"
+        "\n"
+        "[options]\n"
+        "install_requires =\n"
+        "    requests>=2.31.0  # http client\n"
+        "    flask[async]==3.0.0\n"
+        "    ; a full-line comment\n"
+        "    numpy>=1.20,<2.0\n"
+        "\n"
+        "[options.extras_require]\n"
+        "test =\n"
+        "    pytest\n"
+        "    pytest-cov\n"
+        "docs =\n"
+        "    sphinx\n"
+    )
+    deps = parse_setup_cfg(cfg)
+    names = {dep.name for dep in deps}
+    assert names == {"requests", "flask", "numpy", "pytest", "pytest-cov", "sphinx"}
+    assert all(dep.ecosystem == "pypi" for dep in deps)
+    assert all(dep.source == str(cfg) for dep in deps)
+
+
+def test_parse_setup_cfg_skips_urls_and_missing_sections(tmp_path: Path):
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text(
+        "[options]\n"
+        "install_requires =\n"
+        "    requests\n"
+        "    internal-lib @ https://example.com/internal-lib.tar.gz\n"
+    )
+    names = {dep.name for dep in parse_setup_cfg(cfg)}
+    assert names == {"requests"}
+
+
+def test_find_manifests_discovers_setup_cfg(tmp_path: Path):
+    (tmp_path / "setup.cfg").write_text("[options]\ninstall_requires =\n    requests\n")
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "setup.cfg" in found
+
+
+def test_parse_manifest_routes_setup_cfg_to_setup_cfg_parser(tmp_path: Path):
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text("[options]\ninstall_requires =\n    requests\n")
+    names = {dep.name for dep in parse_manifest(cfg)}
     assert names == {"requests"}
