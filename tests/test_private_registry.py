@@ -792,6 +792,40 @@ def test_poetry_explicit_source_scoping_covers_dependency_groups(tmp_path: Path)
     assert explicit_names == {"internal-dev-tool"}
 
 
+def test_poetry_multiple_constraints_dependency_scoped_to_explicit_source(tmp_path: Path):
+    """Poetry's documented "multiple constraints" list-form dependency
+    (https://python-poetry.org/docs/dependency-specification/#multiple-
+    constraints-dependencies) can mix a platform-scoped explicit-source
+    variant with a plain-PyPI one, e.g. Poetry's own docs example:
+    `foo = [{platform = "darwin", url = "..."}, {platform = "linux",
+    version = "^1.0", source = "pypi"}]`. Confirmed live with a real
+    `poetry lock` against an unreachable explicit source: the darwin-
+    scoped variant's `source = "internal"` was genuinely consulted (the
+    resolver tried to contact its URL, not PyPI) -- the same real
+    resolution `test_poetry_dependency_pinned_to_explicit_source_is_scoped_private`
+    already covers for a single-table spec. `spec.get("source")` isn't
+    reachable on a list, so this shape was previously invisible here.
+    """
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[[tool.poetry.source]]\n"
+        'name = "internal"\n'
+        'url = "https://pkgs.internal.example/simple/"\n'
+        'priority = "explicit"\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        "platform-varying-pkg = [\n"
+        '    { platform = "darwin", version = "^1.0", source = "internal" },\n'
+        '    { platform = "linux", version = "^2.0", source = "pypi" }\n'
+        "]\n"
+    )
+
+    blanket, explicit_names = poetry_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == {"platform-varying-pkg"}
+
+
 def test_poetry_missing_file_is_not_an_error(tmp_path: Path):
     blanket, explicit_names = poetry_private_registry_context([tmp_path / "pyproject.toml"])
 

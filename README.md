@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.28
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.29
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.28
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.29
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.28
+    rev: v0.1.29
     hooks:
       - id: slopcheck
 ```
@@ -472,6 +472,21 @@ resolves only against that source. Before v0.1.23, this tool had no
 notion of Poetry's own source table, so a Poetry project's
 private-only dependencies (blanket or explicitly-sourced) were flagged
 as plain hallucinations exactly like the pre-v0.1.10 pip/npm gap above.
+
+An explicit-source reference is also honored inside Poetry's own
+"multiple constraints" list-form dependency
+(https://python-poetry.org/docs/dependency-specification/#multiple-constraints-dependencies) —
+Poetry's documented way to vary a dependency's spec by Python-version or
+platform marker, e.g. its own docs example of a platform-specific
+compiled wheel falling back to a source repository elsewhere:
+`foo = [{platform = "darwin", url = "..."}, {platform = "linux", version
+= "^1.0", source = "pypi"}]`. Before v0.1.29, only a single-table spec's
+`source =` key was read; a list entry's own `source` was invisible,
+confirmed live with a real `poetry lock` against an unreachable
+explicit source — the resolver genuinely contacted it for the matching
+platform variant, the same real resolution as the single-table case
+above, but this tool reported the name as a plain, unscoped
+hallucination candidate instead.
 
 A `-i`/`--extra-index-url`/`--index-url` directive is now honored no
 matter which requirements-format file it's written in — not just a

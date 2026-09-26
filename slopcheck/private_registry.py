@@ -375,7 +375,21 @@ def poetry_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, 
         dep_tables.extend(group.get("dependencies", {}) for group in poetry.get("group", {}).values())
         for dep_table in dep_tables:
             for dep_name, spec in dep_table.items():
-                if isinstance(spec, dict) and spec.get("source") in explicit_source_names:
+                # A "multiple constraints" dependency (Poetry's own documented
+                # syntax for varying a dependency's spec by python-version/
+                # platform marker) is a *list* of tables, not one table --
+                # confirmed live (`poetry lock`) that a platform-scoped variant
+                # naming an explicit source is genuinely honored (the resolver
+                # contacted that source's URL, not PyPI, for the matching
+                # platform) exactly like the single-table case below. Reading
+                # only `spec.get("source")` missed this shape entirely, since
+                # a list has no `.get` -- `isinstance(spec, dict)` was False
+                # for every entry and the whole dependency silently never
+                # scoped, producing a false `not_found` hallucination flag for
+                # a name that a real `poetry install` resolves fine on the
+                # matching platform.
+                specs = spec if isinstance(spec, list) else [spec]
+                if any(isinstance(s, dict) and s.get("source") in explicit_source_names for s in specs):
                     explicit_names.add(_normalize_name(dep_name))
 
     return blanket, explicit_names
