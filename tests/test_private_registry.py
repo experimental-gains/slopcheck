@@ -290,6 +290,35 @@ def test_pip_config_has_extra_index_checks_bare_index_url_option(tmp_path: Path,
     assert private_registry._pip_config_has_extra_index() is True
 
 
+def test_pip_config_has_extra_index_checks_underscore_option_spelling(tmp_path: Path, monkeypatch):
+    # pip.conf's option keys are normalized by real pip's own config loader
+    # (pip._internal.configuration._normalized_keys: `name.lower().replace(
+    # "_", "-")`) before being read, so `extra_index_url = ...` (underscore)
+    # is exactly as effective as the canonical `extra-index-url = ...`
+    # (dash) spelling — confirmed live: `PIP_CONFIG_FILE=... pip config -v
+    # list` against an underscore-only pip.conf reported
+    # `global.extra-index-url=...`, and `pip install --dry-run -v` against
+    # the same file with an unreachable `127.0.0.1:9` index genuinely
+    # printed "Looking in indexes: https://pypi.org/simple,
+    # http://127.0.0.1:9/simple". configparser itself does no such
+    # underscore-to-dash normalization (only lowercasing), so checking only
+    # the two dash-spelled option names via `parser.has_option` missed this
+    # real, pip-equivalent spelling entirely.
+    conf = tmp_path / "pip.conf"
+    conf.write_text("[global]\nextra_index_url = https://pypi.internal.example/simple\n")
+    monkeypatch.setattr(private_registry, "_pip_config_paths", lambda: [conf])
+
+    assert private_registry._pip_config_has_extra_index() is True
+
+
+def test_pip_config_has_extra_index_checks_underscore_bare_index_url(tmp_path: Path, monkeypatch):
+    conf = tmp_path / "pip.conf"
+    conf.write_text("[global]\nindex_url = https://pypi.internal.example/simple\n")
+    monkeypatch.setattr(private_registry, "_pip_config_paths", lambda: [conf])
+
+    assert private_registry._pip_config_has_extra_index() is True
+
+
 def test_pip_config_has_extra_index_skips_missing_file_and_checks_next(tmp_path: Path, monkeypatch):
     missing = tmp_path / "does-not-exist.conf"
     conf = tmp_path / "pip.conf"

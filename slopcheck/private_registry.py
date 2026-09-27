@@ -90,7 +90,29 @@ def _pip_config_paths() -> list[Path]:
     return paths
 
 
+_PIP_INDEX_OPTION_NAMES = {"extra-index-url", "index-url"}
+
+
 def _pip_config_has_extra_index() -> bool:
+    """Whether any of pip's config files sets an extra/alternate index.
+
+    Checks each option name in both pip.conf's canonical dash spelling and
+    its underscore alias (`extra_index_url`/`index_url`) — confirmed live
+    (`PIP_CONFIG_FILE=... pip config -v list`) that real pip's own config
+    loader normalizes every key it reads with `name.lower().replace("_",
+    "-")` (pip._internal.configuration._normalized_keys) before storing it,
+    so `extra_index_url = ...` in pip.conf is exactly as effective as
+    `extra-index-url = ...` — and confirmed further (`pip install --dry-run
+    -v`, unreachable `127.0.0.1:9` index) that a bare-underscore pip.conf
+    genuinely made pip look in that index ("Looking in indexes:
+    https://pypi.org/simple, http://127.0.0.1:9/simple"). configparser
+    itself does no such normalization (only `option.lower()`, never
+    underscore-to-dash), so checking only the two dash-spelled option names
+    via `parser.has_option` silently missed a pip.conf written with the
+    underscore spelling — a real, pip-documented-equivalent spelling, not an
+    invalid one — misreporting a genuinely private-only dependency as a
+    plain `not_found` hallucination instead of downgrading it to `private`.
+    """
     for path in _pip_config_paths():
         if not path.is_file():
             continue
@@ -100,8 +122,11 @@ def _pip_config_has_extra_index() -> bool:
         except configparser.Error:
             continue
         for section in ("global", "install"):
-            if parser.has_option(section, "extra-index-url") or parser.has_option(section, "index-url"):
-                return True
+            if not parser.has_section(section):
+                continue
+            for option in parser.options(section):
+                if option.replace("_", "-") in _PIP_INDEX_OPTION_NAMES:
+                    return True
     return False
 
 
