@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.41
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.42
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.41
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.42
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.41
+    rev: v0.1.42
     hooks:
       - id: slopcheck
 ```
@@ -506,6 +506,22 @@ pattern for anyone using a dotfiles manager, or any distro/desktop
 environment that sets it by default) was invisible to it — the exact
 same false-hallucination failure mode this section exists to prevent,
 just reached through an env var this tool wasn't reading yet.
+
+pip's own config loader also normalizes every option key it reads,
+replacing underscores with dashes before storing it (pip's own
+`pip._internal.configuration._normalized_keys`) — confirmed live
+(`PIP_CONFIG_FILE=... pip config -v list`) that `extra_index_url = ...`
+in `pip.conf` shows up as `global.extra-index-url=...`, exactly as
+effective as the canonical dash spelling, and confirmed further
+(`pip install --dry-run -v` against an unreachable local index) that a
+bare-underscore `pip.conf` genuinely made pip look in that index.
+Before v0.1.42, this tool checked `pip.conf` with `configparser`
+(which lowercases option names but never touches underscores) against
+only the two dash-spelled option names, so a `pip.conf` written with
+the underscore spelling — real and pip-equivalent, not invalid — was
+invisible to it, the same false-hallucination failure mode as every
+other gap in this section, just reached through a key spelling rather
+than a file location or env var.
 
 npm's own per-user config file location moves the same way when
 `npm_config_userconfig` (or the uppercase `NPM_CONFIG_USERCONFIG`
