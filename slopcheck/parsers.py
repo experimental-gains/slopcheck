@@ -206,6 +206,44 @@ def _build_system_deps(data: dict) -> list[str]:
     return list(build_system.get("requires", []))
 
 
+def _hatch_deps(data: dict) -> list[str]:
+    """Flatten Hatch's `[tool.hatch.env].requires` and per-environment `dependencies` into requirement specs.
+
+    Hatch (https://hatch.pypa.io/latest/config/environment/overview/,
+    the PyPA-recommended build backend/env manager) has two distinct
+    tables of its own, neither PEP 621 nor PEP 735 and neither read by any
+    function above: `[tool.hatch.env] requires` lists environment-plugin
+    packages Hatch itself installs (via its own resolver, not even pip)
+    before it can even parse the rest of an environment's config, and each
+    `[tool.hatch.envs.<name>] dependencies` lists plain PEP 508 requirement
+    strings installed into that named environment. Confirmed live with
+    Hatch 1.18.1 against a scratch project: a `[tool.hatch.envs.default]
+    dependencies = ["totally-hallucinated-package-xyz-123"]` table made
+    `hatch env create` genuinely fail resolving the fake name from PyPI
+    ("Could not find a version that satisfies the requirement ... (from
+    versions: none)"), and a separate `[tool.hatch.env] requires =
+    ["totally-hallucinated-hatch-plugin-xyz-987"]` made the same command
+    fail even earlier, while syncing environment plugin requirements
+    ("No solution found when resolving dependencies ... was not found in
+    the package registry"). Before this fix neither table had any reader
+    here at all, so a hallucinated name planted in either one — a real
+    place for one to land, since Hatch is the build backend this project's
+    own dependents are as likely to use as Poetry or PDM — sailed through
+    unchecked even though a real `hatch env create` genuinely tries to
+    install it. Unlike Poetry's/uv's dependency tables, Hatch's own docs
+    only document these two fields as plain requirement-string lists (no
+    git/path/url table form), so no registry-source filtering is needed
+    here the way `_is_poetry_registry_dep`/`_is_uv_registry_source` do it
+    for their own tables.
+    """
+    hatch = data.get("tool", {}).get("hatch", {})
+    names = list(hatch.get("env", {}).get("requires", []))
+    for env in hatch.get("envs", {}).values():
+        if isinstance(env, dict):
+            names.extend(env.get("dependencies", []))
+    return names
+
+
 def _is_poetry_registry_dep(spec) -> bool:
     """Whether a Poetry dependency spec resolves against PyPI at all.
 
@@ -602,6 +640,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
         + _dependency_groups_deps(data)
         + _pdm_dev_deps(data)
         + _build_system_deps(data)
+        + _hatch_deps(data)
     )
     skip_names = _uv_non_registry_names(data) | _self_referential_name(data)
     deps = []

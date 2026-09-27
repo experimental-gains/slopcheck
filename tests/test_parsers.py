@@ -549,6 +549,49 @@ def test_parse_pyproject_pdm_dev_dependencies(tmp_path: Path):
     assert names == {"requests", "pytest"}
 
 
+def test_parse_pyproject_hatch_env_dependencies(tmp_path: Path):
+    # Hatch (the PyPA-recommended build backend/env manager) has two of its
+    # own dependency-bearing tables, neither PEP 621 nor PEP 735: a plain
+    # PEP 508 requirement-string list under each named
+    # [tool.hatch.envs.<name>].dependencies, and a separate
+    # [tool.hatch.env].requires listing environment-plugin packages Hatch
+    # installs before it can even parse the rest of an environment's
+    # config. Confirmed live with real Hatch 1.18.1 against a scratch
+    # project: `hatch env create` genuinely tried (and failed) to resolve
+    # a fake name from PyPI for both a
+    # [tool.hatch.envs.default].dependencies entry ("Could not find a
+    # version that satisfies the requirement ... (from versions: none)")
+    # and a separate [tool.hatch.env].requires entry ("No solution found
+    # when resolving dependencies ... was not found in the package
+    # registry"). Before this fix neither table had any reader at all, so
+    # a hallucinated name planted in either one sailed through unchecked.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests"]
+
+        [tool.hatch.env]
+        requires = ["totally-hallucinated-hatch-plugin-xyz-987"]
+
+        [tool.hatch.envs.default]
+        dependencies = ["totally-hallucinated-package-xyz-123"]
+
+        [tool.hatch.envs.test]
+        dependencies = ["pytest", "coverage[toml]"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {
+        "requests",
+        "totally-hallucinated-hatch-plugin-xyz-987",
+        "totally-hallucinated-package-xyz-123",
+        "pytest",
+        "coverage",
+    }
+
+
 def test_parse_pyproject_build_system_requires(tmp_path: Path):
     # PEP 518 makes [build-system] requires mandatory for any project pip
     # can build from source — a plain list of PEP 508 requirement strings
