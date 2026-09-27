@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.36
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.37
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.36
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.37
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.36
+    rev: v0.1.37
     hooks:
       - id: slopcheck
 ```
@@ -397,7 +397,7 @@ same failure shape as the `[build-system] requires` gap above.
 PDM's own legacy `[tool.pdm.dev-dependencies]` table — predates PEP 735,
 structurally identical to `[dependency-groups]` (group name -> list of
 PEP 508 requirement strings) but under a different, PDM-specific table
-— is now read too (fixed in v0.1.36). Confirmed live against real PDM
+— is now read too (fixed in v0.1.37). Confirmed live against real PDM
 2.29.2: `pdm lock -v` run against a `pyproject.toml` with a fake name
 planted only in `[tool.pdm.dev-dependencies]` genuinely tried to
 resolve it from PyPI (`CandidateNotFound: Unable to find candidates
@@ -618,6 +618,25 @@ per-environment file `-r`s into, carrying the index config so it isn't
 duplicated in each one — confirmed live against real pip that a
 directive placed either way applies to the whole install). Both used
 to get every private-only dependency flagged as a plain hallucination.
+
+A `-i`/`.npmrc` scope mapping/`.yarnrc.yml` registry line is now
+detected even in a file that starts with a UTF-8 byte-order mark (fixed
+in v0.1.37) — a real, valid file shape some editors/tools write (e.g. a
+Windows-authored `requirements.txt` or `.npmrc`), and one this tool
+already tolerated for the *manifest* files it reads dependency names
+from. Confirmed live against all three real tools that the directive is
+genuinely honored despite the BOM: pip's own output showed "Looking in
+indexes: ..." and real connection attempts for a `-i`-directed,
+BOM-prefixed `requirements.txt`; `npm install --loglevel=verbose`
+showed a real fetch attempt at the configured address for a
+BOM-prefixed `.npmrc`'s scope mapping; and real Yarn Berry (4.18.1)
+refused an unencrypted-registry resolution with "Unsafe http requests
+must be explicitly whitelisted" for a BOM-prefixed `.yarnrc.yml` —
+proof it had genuinely read the address out of the file. Before this
+fix, the leftover BOM character glued onto each file's first line broke
+the regex that looks for the directive there, so this tool silently
+reported no private index configured and flagged a genuinely
+private-only dependency as a plain hallucination instead.
 
 ## requirements.txt inline comments
 
