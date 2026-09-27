@@ -2,6 +2,7 @@ from pathlib import Path
 
 from slopcheck import private_registry
 from slopcheck.private_registry import (
+    bunfig_private_registry_context,
     npm_private_registry_context,
     npm_scope,
     pdm_private_registry_context,
@@ -573,6 +574,7 @@ def _clear_registry_env(monkeypatch):
         "NPM_CONFIG_REGISTRY",
         "YARN_NPM_REGISTRY_SERVER",
         "YARN_RC_FILENAME",
+        "BUN_CONFIG_REGISTRY",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -752,6 +754,119 @@ def test_yarnrc_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
     (tmp_path / "empty-home").mkdir()
 
     blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == set()
+
+
+def test_bunfig_scope_registry(tmp_path: Path, monkeypatch):
+    """Bun (https://bun.sh/docs/install/registries) reads its own
+    `bunfig.toml`, entirely independent of `.npmrc` — confirmed live (Bun
+    1.4.2): a project with only a `bunfig.toml` and a scoped
+    `[install.scopes]` entry genuinely routed resolution of that scope at
+    the configured address (`ConnectionRefused` to a closed local port,
+    not a 404 from the public registry). Unlike Yarn's `npmScopes` keys,
+    Bun's own `[install.scopes]` keys are already `@`-prefixed."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / "bunfig.toml").write_text(
+        '[install.scopes]\n"@acmecorp" = "https://npm.internal.example/"\n'
+    )
+
+    blanket, scopes = bunfig_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_bunfig_scope_registry_table_form(tmp_path: Path, monkeypatch):
+    """A scope value can also be a `{ url = ..., token = ... }` table
+    (Bun's authenticated-registry form) rather than a plain string —
+    confirmed live, same `ConnectionRefused` tell as the plain-string
+    form."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / "bunfig.toml").write_text(
+        '[install.scopes]\n"@acmecorp" = { url = "https://npm.internal.example/", token = "abc" }\n'
+    )
+
+    blanket, scopes = bunfig_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_bunfig_blanket_registry(tmp_path: Path, monkeypatch):
+    """`[install].registry` with no `[install.scopes]` at all routes every
+    package through it — confirmed live, the Bun analog of npm's
+    `registry=` line."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / "bunfig.toml").write_text('[install]\nregistry = "https://npm.internal.example/"\n')
+
+    blanket, _scopes = bunfig_private_registry_context([tmp_path])
+
+    assert blanket is True
+
+
+def test_bunfig_blanket_registry_table_form(tmp_path: Path, monkeypatch):
+    """`[install].registry` can also be a `{ url = ..., token = ... }`
+    table rather than a plain string — confirmed live, same
+    `ConnectionRefused` tell as the plain-string form."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / "bunfig.toml").write_text(
+        '[install]\nregistry = { url = "https://npm.internal.example/", token = "abc" }\n'
+    )
+
+    blanket, _scopes = bunfig_private_registry_context([tmp_path])
+
+    assert blanket is True
+
+
+def test_bunfig_env_var_triggers_blanket(tmp_path: Path, monkeypatch):
+    """`BUN_CONFIG_REGISTRY` is the env var equivalent of the blanket
+    `bunfig.toml` form — confirmed live, mirrors npm's
+    `npm_config_registry`."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("BUN_CONFIG_REGISTRY", "https://npm.internal.example/")
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    blanket, _scopes = bunfig_private_registry_context([])
+
+    assert blanket is True
+
+
+def test_bunfig_home_global_config_is_read(tmp_path: Path, monkeypatch):
+    """A user-level `~/.bunfig.toml` is read too — confirmed live, same
+    `ConnectionRefused` tell, with no project-root `bunfig.toml` present
+    at all — the Bun analogue of npm's userconfig / Yarn's home-directory
+    `.yarnrc.yml` fallback."""
+    _clear_registry_env(monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".bunfig.toml").write_text(
+        '[install.scopes]\n"@acmecorp" = "https://npm.internal.example/"\n'
+    )
+
+    blanket, scopes = bunfig_private_registry_context([tmp_path / "project"])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_bunfig_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    blanket, scopes = bunfig_private_registry_context([tmp_path])
 
     assert blanket is False
     assert scopes == set()

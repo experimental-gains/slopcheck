@@ -344,6 +344,63 @@ def npm_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[s
     return blanket, scopes
 
 
+def _bunfig_paths(project_roots: list[Path]) -> list[Path]:
+    # Bun (https://bun.sh/docs/install/registries) reads its own config file,
+    # `bunfig.toml`, at the project root, entirely independent of `.npmrc` —
+    # confirmed live (Bun 1.4.2): a project with only a `bunfig.toml` (no
+    # `.npmrc` at all) genuinely routed `bun install` at a private registry,
+    # both for a blanket `[install].registry` override and a scoped
+    # `[install.scopes]` entry, each confirmed as a real connection attempt
+    # at the configured address (ConnectionRefused to a closed local port)
+    # rather than the public npm registry (a 404 there instead). Bun also
+    # reads a project-root `.npmrc`'s scope/blanket directives on top of its
+    # own `bunfig.toml` (confirmed live too), so that case is already covered
+    # by `npm_private_registry_context` without any Bun-specific code — this
+    # function only needs to add the config Bun alone reads.
+    #
+    # A user-level `~/.bunfig.toml` is read too (confirmed live, same
+    # ConnectionRefused tell, with no project-root bunfig.toml present at
+    # all), the Bun analogue of npm's userconfig / Yarn's home-directory
+    # `.yarnrc.yml` fallback.
+    paths = [root / "bunfig.toml" for root in project_roots]
+    paths.append(Path.home() / ".bunfig.toml")
+    return paths
+
+
+def bunfig_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[str]]:
+    """Returns (blanket, scopes_mapped_to_a_private_registry) for Bun's own config.
+
+    `[install].registry` (a plain URL string, or a `{ url = ..., token = ...
+    }` table for an authenticated registry — confirmed live, both forms
+    genuinely redirect resolution) is Bun's blanket override, and
+    `BUN_CONFIG_REGISTRY` is its env var equivalent (confirmed live, mirrors
+    npm's `npm_config_registry`). `[install.scopes]` keys are already
+    `@`-prefixed in real `bunfig.toml` files (unlike Yarn's bare-name
+    `npmScopes` keys), so they need no reformatting to compare equal to
+    `npm_scope()`'s output — confirmed live for both a plain-string and a
+    `{ url = ..., token = ... }` scope value, either shape genuinely
+    redirects that scope alone.
+    """
+    blanket = bool(os.environ.get("BUN_CONFIG_REGISTRY"))
+    scopes: set[str] = set()
+    for path in _bunfig_paths(project_roots):
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        install = data.get("install", {})
+        if not isinstance(install, dict):
+            continue
+        if install.get("registry"):
+            blanket = True
+        install_scopes = install.get("scopes", {})
+        if isinstance(install_scopes, dict):
+            scopes.update(install_scopes.keys())
+    return blanket, scopes
+
+
 def poetry_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[str]]:
     """Returns (blanket, names_pinned_to_an_explicit_source).
 

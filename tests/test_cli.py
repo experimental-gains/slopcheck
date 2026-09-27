@@ -382,6 +382,27 @@ def test_npm_blanket_registry_downgrades_unscoped_package(tmp_path: Path, monkey
     assert results[0][1].status == "private"
 
 
+def test_bunfig_scope_downgrades_scoped_package(tmp_path: Path, monkeypatch):
+    # End-to-end regression: Bun's own `bunfig.toml` is a private-registry
+    # mechanism `cli.scan` had zero awareness of at all — a `bunfig.toml`
+    # with no `.npmrc`/`.yarnrc.yml` anywhere routing a scoped dependency
+    # at a private registry (confirmed live, real `bun install`) used to
+    # leave that name checked straight against the public npm registry,
+    # reporting a genuinely Bun-private-only package as `not_found`.
+    monkeypatch.delenv("BUN_CONFIG_REGISTRY", raising=False)
+    (tmp_path / "bunfig.toml").write_text(
+        '[install.scopes]\n"@acmecorp" = "https://npm.internal.example/"\n'
+    )
+    (tmp_path / "package.json").write_text(
+        '{"dependencies": {"@acmecorp/totally-made-up-pkg-9000": "^1.0.0"}}'
+    )
+
+    with patch.dict(cli.CHECKERS, {"npm": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert results[0][1].status == "private"
+
+
 def test_print_report_labels_and_detail_formatting(capsys):
     # Regression test for a large family of mutmut survivors in
     # `_print_report`'s `labels` dict and detail-string formatting.

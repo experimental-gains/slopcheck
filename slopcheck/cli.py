@@ -15,6 +15,7 @@ from .parsers import (
     requirements_txt_files_touched,
 )
 from .private_registry import (
+    bunfig_private_registry_context,
     npm_private_registry_context,
     npm_scope,
     pdm_private_registry_context,
@@ -128,6 +129,9 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     )
     npm_project_roots = [p.parent for p in paths if p.name == "package.json"]
     npm_blanket, npm_scopes = npm_private_registry_context(npm_project_roots)
+    bunfig_blanket, bunfig_scopes = bunfig_private_registry_context(npm_project_roots)
+    npm_blanket = npm_blanket or bunfig_blanket
+    npm_scopes = npm_scopes | bunfig_scopes
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for dep, result in pool.map(_check_one, unique_deps):
