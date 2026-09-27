@@ -269,6 +269,53 @@ def _dependency_groups_deps(data: dict) -> list[str]:
     return names
 
 
+def _pdm_dev_deps(data: dict) -> list[str]:
+    """Flatten PDM's legacy `[tool.pdm.dev-dependencies]` groups into requirement specs.
+
+    PDM (https://pdm-project.org/en/latest/usage/dependency/#add-development-only-dependencies,
+    "Added in 1.5.0") predates PEP 735 and originally shipped its own table for
+    dev-only dependency groups, structurally identical to `[dependency-groups]`
+    (a table of group-name -> list of PEP 508 requirement strings) but under
+    `[tool.pdm.dev-dependencies]` instead of the later standardized top-level
+    table `_dependency_groups_deps` already reads. PDM's own current docs steer
+    `pdm add -dG <group>` toward writing `[dependency-groups]` now, but this
+    older table is not deprecated or ignored — confirmed live (PDM 2.29.2,
+    `pdm lock -v` against a `pyproject.toml` with a `[tool.pdm.dev-dependencies]
+    test = ["totally-hallucinated-package-xyz-123"]` table and nothing
+    referencing that name anywhere else): PDM genuinely read the table and
+    tried to resolve the fake name from PyPI (`CandidateNotFound: Unable to
+    find candidates for totally-hallucinated-package-xyz-123`), i.e. a real
+    `pdm install`/`pdm lock` installs whatever is planted here just as much as
+    a `[dependency-groups]` entry. Before this fix, nothing in this module read
+    `[tool.pdm.dev-dependencies]` at all, so any project still using this
+    still-current, still-honored legacy form (a real, common state for any
+    PDM project created before the `[dependency-groups]` migration, or one
+    that simply hasn't re-run `pdm add -dG` since) had every name in it
+    silently never checked — the same silent false-all-clear shape as the
+    other legacy-but-still-real dependency tables already fixed here
+    (`Pipfile`, `setup.cfg`).
+
+    A group entry can also be a PDM-added editable/local/URL/VCS dependency —
+    confirmed live via `pdm add -e ./sub-package --dev`, which wrote
+    `"-e file:///${PROJECT_ROOT}/sub-package#egg=subpkg"` into this same
+    table (PDM always writes these as a `pip`-style requirement *string*,
+    never a table, even for local paths and VCS URLs — confirmed live and
+    against PDM's own docs, unlike Poetry's/uv's dict-shaped git/path/url
+    overrides). Such a string needs no special-casing to exclude: it starts
+    with `-e ` or contains `://`, neither of which `_REQ_LINE_RE` matches
+    (it requires a leading name character), so it's already dropped the same
+    way `parse_pyproject_toml`'s main loop drops any other spec the regex
+    doesn't match, exactly mirroring how `_parse_requirements_txt` treats an
+    `-e`/URL line as non-registry-resolvable rather than a package name.
+    """
+    names = []
+    for group in data.get("tool", {}).get("pdm", {}).get("dev-dependencies", {}).values():
+        for item in group:
+            if isinstance(item, str):
+                names.append(item)
+    return names
+
+
 def _setuptools_dynamic_files(spec) -> list[str]:
     if not isinstance(spec, dict):
         return []
@@ -553,6 +600,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
         _pep621_deps(data)
         + _poetry_deps(data)
         + _dependency_groups_deps(data)
+        + _pdm_dev_deps(data)
         + _build_system_deps(data)
     )
     skip_names = _uv_non_registry_names(data) | _self_referential_name(data)

@@ -516,6 +516,39 @@ def test_parse_pyproject_dependency_groups(tmp_path: Path):
     assert names == {"requests", "pytest", "time-machine", "mkdocs"}
 
 
+def test_parse_pyproject_pdm_dev_dependencies(tmp_path: Path):
+    # PDM's own legacy `[tool.pdm.dev-dependencies]` table (predates PEP 735,
+    # "Added in 1.5.0" per PDM's docs) — structurally identical to
+    # [dependency-groups] (group name -> list of PEP 508 requirement strings)
+    # but under a different, PDM-specific table this parser never read at
+    # all. Confirmed live with real PDM 2.29.2 (`pdm lock -v` against exactly
+    # this shape): it genuinely tried to resolve the fake name from PyPI
+    # (CandidateNotFound), so a real `pdm install`/`pdm lock` installs
+    # whatever's planted here just as much as a [dependency-groups] entry —
+    # this table isn't deprecated or inert even though PDM's own `pdm add -dG`
+    # now defaults to writing [dependency-groups] instead.
+    # A group entry can also be a PDM-written editable/local/URL/VCS
+    # dependency (confirmed live via `pdm add -e ./sub-package --dev`, which
+    # wrote "-e file:///${PROJECT_ROOT}/sub-package#egg=subpkg" into this same
+    # table) — that string must NOT be mistaken for a package name.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests>=2"]
+
+        [tool.pdm.dev-dependencies]
+        test = ["pytest"]
+        dev = [
+            "-e file:///${PROJECT_ROOT}/sub-package#egg=subpkg",
+        ]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "pytest"}
+
+
 def test_parse_pyproject_build_system_requires(tmp_path: Path):
     # PEP 518 makes [build-system] requires mandatory for any project pip
     # can build from source — a plain list of PEP 508 requirement strings
