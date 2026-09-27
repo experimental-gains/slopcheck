@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.42
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.43
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.42
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.43
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.42
+    rev: v0.1.43
     hooks:
       - id: slopcheck
 ```
@@ -522,6 +522,28 @@ the underscore spelling — real and pip-equivalent, not invalid — was
 invisible to it, the same false-hallucination failure mode as every
 other gap in this section, just reached through a key spelling rather
 than a file location or env var.
+
+pip's own system-wide ("global") config lookup moves the same way its
+per-user one does, but via the sibling `XDG_CONFIG_DIRS` variable
+instead of `XDG_CONFIG_HOME`: real pip's vendored `platformdirs`
+(`Unix._site_config_dirs`) derives this location from
+`$XDG_CONFIG_DIRS` (colon-separated, falling back to `/etc/xdg` when
+unset or blank), appending `/pip` to each directory, and checks
+`pip.conf` there *in addition to*, not instead of, the separate
+`/etc/pip.conf` this tool already checked. Confirmed live against real
+pip two ways: with no environment customization at all, a `pip.conf`
+placed at this box's real, unmodified default location
+(`/etc/xdg/pip/pip.conf`) made `pip install --dry-run -v` against an
+unreachable index genuinely print "Looking in indexes:
+https://pypi.org/simple, http://127.0.0.1:9/simple"; with
+`XDG_CONFIG_DIRS` set to a custom path, the same `pip.conf` placed at
+`$XDG_CONFIG_DIRS/pip/pip.conf` was honored instead. Before v0.1.43,
+this tool only ever checked the hardcoded `/etc/pip.conf`, so a private
+index configured via this real, genuinely default pip config location
+(a real deployment pattern: a Linux distro or Docker base image
+dropping a managed `pip.conf` at the *actual* system-wide location
+pip's own docs promise) was invisible to it, the same
+false-hallucination failure mode as every other gap in this section.
 
 npm's own per-user config file location moves the same way when
 `npm_config_userconfig` (or the uppercase `NPM_CONFIG_USERCONFIG`
