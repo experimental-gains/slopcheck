@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.38
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.39
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.38
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.39
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.38
+    rev: v0.1.39
     hooks:
       - id: slopcheck
 ```
@@ -532,6 +532,28 @@ npm's `npm_config_userconfig` — including the same full case-insensitive
 matching (confirmed live the same way), and the same pre-v0.1.28 gap:
 only the exact `YARN_NPM_REGISTRY_SERVER`/`YARN_RC_FILENAME` spellings
 were recognized until that fix.
+
+Bun has its own config file too, `bunfig.toml`, entirely independent
+of `.npmrc`/`.yarnrc.yml` (fixed in v0.1.39 — earlier versions had no
+reader for it at all). `[install].registry` (a plain URL string, or a
+`{ url = ..., token = ... }` table for an authenticated registry) is a
+blanket override, and `[install.scopes]` maps individual `@scope`
+names to their own registry, in either form. `BUN_CONFIG_REGISTRY` is
+the env var equivalent of the blanket form. Confirmed live against
+real Bun (1.4.2): both a blanket `[install].registry` and a scoped
+`[install.scopes]` entry genuinely routed `bun install`'s resolution
+at the configured address (`ConnectionRefused` against a closed local
+port, not a 404 from the public npm registry), for both the
+plain-string and token-table value shapes, and the same for
+`BUN_CONFIG_REGISTRY`. A `bunfig.toml` is read from the project root
+and merged with a home-directory global one (`~/.bunfig.toml`, also
+confirmed live), mirroring npm's/Yarn Berry's own project+global
+split. Bun *also* honors a project's `.npmrc` on top of its own
+config (confirmed live too), so that overlap was already covered by
+the existing npm detection above — this fix only adds the config Bun
+alone reads. Before this fix, a Bun project with a private registry
+configured only via `bunfig.toml` had every legitimately-private
+scoped dependency flagged as a plain hallucination.
 
 Poetry has a third, independent private-registry mechanism: a
 `[[tool.poetry.source]]` table in `pyproject.toml` itself, consulted by
