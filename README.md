@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.37
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.38
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.37
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.38
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.37
+    rev: v0.1.38
     hooks:
       - id: slopcheck
 ```
@@ -408,6 +408,24 @@ now defaults to writing `[dependency-groups]` instead. Earlier versions
 had no reader for this table at all, so a hallucinated name planted
 only in a still-common, still-honored PDM dev-dependency group sailed
 through unchecked.
+
+Hatch's own two dependency-bearing tables — `[tool.hatch.env] requires`
+(environment-plugin packages Hatch installs before it can even parse
+the rest of an environment's config) and each
+`[tool.hatch.envs.<name>] dependencies` (plain PEP 508 requirement
+strings installed into that named environment) — are now read too
+(fixed in v0.1.38). Neither is PEP 621 or PEP 735; both are
+Hatch-specific and had no reader here at all before this fix.
+Confirmed live against real Hatch 1.18.1: `hatch env create` genuinely
+tried and failed to resolve a fake name from PyPI planted in
+`[tool.hatch.envs.default] dependencies` ("Could not find a version
+that satisfies the requirement ... (from versions: none)"), and a
+separate fake name in `[tool.hatch.env] requires` failed even earlier
+while syncing environment plugin requirements ("No solution found when
+resolving dependencies ... was not found in the package registry").
+Earlier versions had no reader for either table, so a hallucinated
+name planted in one sailed through unchecked even though a real
+`hatch env create` genuinely installs it.
 
 ## Private/internal registries
 
