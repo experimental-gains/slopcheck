@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.34
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.35
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.34
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.35
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.34
+    rev: v0.1.35
     hooks:
       - id: slopcheck
 ```
@@ -381,6 +381,18 @@ name planted only there — a real place for one to end up, since an AI
 assistant asked to scaffold a build backend can invent this list the
 same way it invents a runtime dependency — sailed through unchecked even
 though a real `pip install` from source genuinely installs it first.
+
+`setup.cfg`'s `[options] setup_requires` — the setup.cfg analog of PEP
+518's `[build-system] requires` above, naming packages setuptools
+installs into the build environment before running `setup.py` at all —
+is now read too (fixed in v0.1.35). Confirmed current against
+setuptools 84.0.0 (this project's own pinned minimum), which still
+parses this field, and against pyscaffold's own real, current
+`setup.cfg` (`[options] setup_requires = pyscaffold>=3.2a0,<3.3a0`).
+Earlier versions only read `install_requires`/`extras_require`, so a
+hallucinated name planted only in `setup_requires` sailed through
+unchecked even though a real build genuinely installs it first — the
+same failure shape as the `[build-system] requires` gap above.
 
 ## Private/internal registries
 

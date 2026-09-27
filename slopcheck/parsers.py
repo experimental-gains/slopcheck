@@ -421,6 +421,29 @@ def parse_setup_cfg(path: Path) -> list[Dependency]:
     like any other unresolvable spec, rather than either resolving nothing
     at all or raising on a reference this simple parser doesn't need to
     understand.
+
+    `[options] setup_requires` names packages pip/setuptools installs into
+    the build environment *before* running `setup.py` at all — the setup.cfg
+    analog of PEP 518's `[build-system] requires` (`_build_system_deps`
+    above), for the same legacy, still-real setup.cfg-based projects this
+    function already exists to support. Confirmed current, not a stale
+    relic: setuptools 84.0.0 (the exact minimum this project's own
+    `[build-system] requires` pins) still carries a live parser for it
+    (`setupcfg.py`'s `ConfigOptionsHandler.parsers`: `'setup_requires':
+    self._parse_list_semicolon`), and pyscaffold's own real, current
+    `setup.cfg` uses exactly this field (`[options] setup_requires =
+    pyscaffold>=3.2a0,<3.3a0`). Confirmed live against this parser before
+    the fix: a `setup.cfg` with a real `install_requires` entry alongside a
+    hallucinated name planted only in `setup_requires` produced a clean
+    "1 dependency checked, all clean" report that silently said nothing
+    about the fabricated build-time dependency — the same silent
+    false-all-clear shape as the `Pipfile`/`[build-system] requires` gaps
+    already fixed here, not a loud parse error that would at least surface
+    the gap. Same multi-line-or-semicolon-separated list shape as
+    `install_requires` (setuptools' own `_parse_list_semicolon` falls back
+    to newline-splitting whenever the value contains a `\n`, which every
+    real multi-line setup.cfg list does), so it reuses
+    `_setup_cfg_list_deps` unchanged.
     """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read_string(path.read_text(encoding="utf-8-sig"), source=str(path))
@@ -428,6 +451,8 @@ def parse_setup_cfg(path: Path) -> list[Dependency]:
     deps = []
     if parser.has_option("options", "install_requires"):
         deps.extend(_setup_cfg_list_deps(parser.get("options", "install_requires"), path))
+    if parser.has_option("options", "setup_requires"):
+        deps.extend(_setup_cfg_list_deps(parser.get("options", "setup_requires"), path))
     if parser.has_section("options.extras_require"):
         for value in parser["options.extras_require"].values():
             deps.extend(_setup_cfg_list_deps(value, path))

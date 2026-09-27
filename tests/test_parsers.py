@@ -943,6 +943,31 @@ def test_parse_setup_cfg(tmp_path: Path):
     assert all(dep.source == str(cfg) for dep in deps)
 
 
+def test_parse_setup_cfg_reads_setup_requires(tmp_path: Path):
+    # Real-world find: `[options] setup_requires` (packages setuptools
+    # installs into the build environment before running setup.py at all,
+    # the setup.cfg analog of PEP 518's `[build-system] requires`) had no
+    # reader here at all — confirmed live: setuptools 84.0.0 (this
+    # project's own pinned minimum) still parses this field
+    # (`ConfigOptionsHandler.parsers['setup_requires']`), and pyscaffold's
+    # own real, current setup.cfg uses it (`setup_requires =
+    # pyscaffold>=3.2a0,<3.3a0`). Before this fix, a setup.cfg with a real
+    # `install_requires` entry and a hallucinated name planted only in
+    # `setup_requires` reported "1 dependency checked, all clean" —
+    # silently saying nothing about the fabricated build-time dependency.
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text(
+        "[options]\n"
+        "install_requires =\n"
+        "    requests\n"
+        "setup_requires =\n"
+        "    setuptools_scm\n"
+        "    definitely-not-a-real-hallucinated-pkg-xyz123\n"
+    )
+    names = {dep.name for dep in parse_setup_cfg(cfg)}
+    assert names == {"requests", "setuptools_scm", "definitely-not-a-real-hallucinated-pkg-xyz123"}
+
+
 def test_parse_setup_cfg_skips_urls_and_missing_sections(tmp_path: Path):
     cfg = tmp_path / "setup.cfg"
     cfg.write_text(
