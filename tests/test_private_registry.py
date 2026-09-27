@@ -75,6 +75,31 @@ def test_pip_private_index_from_requirements_txt_short_flag_attached(tmp_path: P
     assert pip_private_index_configured([reqs]) is True
 
 
+def test_pip_private_index_from_requirements_txt_directive_bom_is_stripped(tmp_path: Path, monkeypatch):
+    """Same BOM-tolerance guarantee as every other reader in this codebase
+    (see parsers.py's utf-8-sig comment, and the `uv.toml`/pyproject.toml BOM
+    tests below) — a requirements.txt some editors/tools write with a
+    leading UTF-8 BOM is a real, valid file, not a hypothetical. Confirmed
+    live with real pip (`pip install -r` against a BOM-prefixed requirements.txt
+    whose first line was `-i http://127.0.0.1:9/simple`): pip's own output
+    showed "Looking in indexes: http://127.0.0.1:9/simple" and real connection
+    attempts to that address for a fake package name — the directive was
+    genuinely honored despite the BOM. Before this fix, `path.read_text()`
+    (no encoding) left the leading `﻿` glued onto the first line,
+    `_PIP_DIRECTIVE_RE` (anchored at the line start) no longer matched, and
+    this function silently returned False — misreporting a genuinely
+    private-only dependency as `not_found` instead of `private`."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_bytes(b"\xef\xbb\xbf" + b"-i https://pypi.internal.example/simple\nrequests>=2.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
 def test_pip_private_index_from_pip_conf(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("PIP_INDEX_URL", raising=False)
     monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
@@ -129,6 +154,32 @@ def test_npm_scope_registry_from_npmrc(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "empty-home").mkdir()
     (tmp_path / ".npmrc").write_text("@acmecorp:registry=https://npm.internal.example/\n")
+
+    blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_npm_scope_registry_from_npmrc_bom_is_stripped(tmp_path: Path, monkeypatch):
+    """Same BOM-tolerance guarantee as `pip_private_index_configured` above —
+    confirmed live with real npm (`npm install --loglevel=verbose` against a
+    BOM-prefixed `.npmrc` whose only content was
+    `@acmecorp:registry=http://127.0.0.1:9/`, with a `@acmecorp/`-scoped fake
+    dependency in package.json): npm's own verbose log showed a real fetch
+    attempt to `http://127.0.0.1:9/...` for that scoped name, not the public
+    registry — the scope mapping was genuinely honored despite the BOM.
+    Before this fix, `rc_path.read_text()` (no encoding) left the BOM glued
+    onto the first line, `_NPMRC_SCOPE_RE` no longer matched it, and this
+    scope was silently missed — misreporting a genuinely private-only
+    dependency as `not_found` instead of `private`."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".npmrc").write_bytes(
+        b"\xef\xbb\xbf" + b"@acmecorp:registry=https://npm.internal.example/\n"
+    )
 
     blanket, scopes = npm_private_registry_context([tmp_path])
 
@@ -559,6 +610,31 @@ def test_yarnrc_blanket_registry(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "empty-home").mkdir()
     (tmp_path / ".yarnrc.yml").write_text('npmRegistryServer: "https://npm.internal.example/"\n')
+
+    blanket, _scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is True
+
+
+def test_yarnrc_blanket_registry_bom_is_stripped(tmp_path: Path, monkeypatch):
+    """Same BOM-tolerance guarantee as `pip_private_index_configured` and the
+    `.npmrc` scope test above — confirmed live with real Yarn Berry (4.18.1,
+    via corepack) against a BOM-prefixed `.yarnrc.yml` whose only content was
+    `npmRegistryServer: "http://127.0.0.1:9"`: resolving a fake dependency
+    failed with "Unsafe http requests must be explicitly whitelisted ...
+    (127.0.0.1)" — proof Yarn genuinely read that address out of the BOM'd
+    file (the default registry is `registry.yarnpkg.com` over https, so this
+    error only happens once the private-registry line was actually parsed).
+    Before this fix, `rc_path.read_text()` (no encoding) left the BOM glued
+    onto the first line, `_parse_yarnrc_registries`' line walker never
+    matched the top-level `npmRegistryServer:` key, and this blanket
+    override was silently missed."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".yarnrc.yml").write_bytes(
+        b"\xef\xbb\xbf" + b'npmRegistryServer: "https://npm.internal.example/"\n'
+    )
 
     blanket, _scopes = npm_private_registry_context([tmp_path])
 

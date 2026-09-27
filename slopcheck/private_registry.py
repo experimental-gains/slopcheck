@@ -112,6 +112,23 @@ def pip_private_index_configured(requirements_txt_paths: list[Path]) -> bool:
     package name prefixes — it applies to every package pip resolves in that
     run — so this is a single yes/no for the whole scan rather than a
     per-name pattern match.
+
+    Reads each file as "utf-8-sig", not plain "utf-8" — confirmed live: a
+    requirements.txt starting with a UTF-8 BOM (the same real, valid file
+    shape `parsers._parse_requirements_txt` already handles this way, e.g.
+    one saved by a Windows editor) with `-i http://127.0.0.1:9/simple` as
+    its first line was genuinely honored by a real `pip install -r` —
+    "Looking in indexes: http://127.0.0.1:9/simple" in pip's own output,
+    followed by real connection attempts to that address for a
+    fake-package name. Before this fix, `path.read_text()` (no encoding)
+    left the leading `﻿` glued onto that first line, `_PIP_DIRECTIVE_RE`
+    (anchored at the start of the line) no longer matched it, and this
+    function silently returned `False` — misreporting a genuinely
+    private-only dependency as a plain `not_found` hallucination instead of
+    downgrading it to `private`, even though this same file's dependency
+    names were already being read correctly (parsers.py has used
+    "utf-8-sig" for exactly this reason since the BOM fix documented
+    above it).
     """
     if os.environ.get("PIP_EXTRA_INDEX_URL") or os.environ.get("PIP_INDEX_URL"):
         return True
@@ -120,7 +137,7 @@ def pip_private_index_configured(requirements_txt_paths: list[Path]) -> bool:
     for path in requirements_txt_paths:
         if not path.is_file():
             continue
-        for raw_line in path.read_text().splitlines():
+        for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
             if _PIP_DIRECTIVE_RE.match(raw_line.strip()):
                 return True
     return False
@@ -282,13 +299,30 @@ def npm_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[s
     the same thing entirely independently, via `.yarnrc.yml`/
     `YARN_NPM_REGISTRY_SERVER` rather than `.npmrc`/`npm_config_registry` —
     see `_parse_yarnrc_registries` and `_yarnrc_paths`.
+
+    Both files are read as "utf-8-sig", not plain "utf-8" — confirmed live,
+    the same BOM behavior `pip_private_index_configured` was just fixed for
+    above: a `.npmrc` starting with a UTF-8 BOM and a bare `@acme:registry=
+    http://127.0.0.1:9/` line was genuinely honored by a real `npm install`
+    (verbose log showed a real connection attempt to that address for a
+    `@acme/`-scoped fake package, not the public registry), and a BOM'd
+    `.yarnrc.yml` with `npmRegistryServer: "http://127.0.0.1:9"` was
+    likewise honored by real Yarn Berry (4.18.1) — it refused the resolution
+    with "Unsafe http requests must be explicitly whitelisted ... (127.0.0.1)",
+    which only happens once it has actually read that address out of the
+    config. Plain "utf-8" leaves the leading `﻿` glued onto each file's
+    first line, so a scope/registry directive placed there (a common spot)
+    silently failed to match and this function returned a false blanket=False/
+    scopes=set() — misreporting a genuinely private-only npm/Yarn dependency
+    as a plain `not_found` hallucination instead of downgrading it to
+    `private`.
     """
     blanket = bool(_env_ci("npm_config_registry") or _env_ci("YARN_NPM_REGISTRY_SERVER"))
     scopes: set[str] = set()
     for rc_path in _npmrc_paths(project_roots):
         if not rc_path.is_file():
             continue
-        for raw_line in rc_path.read_text().splitlines():
+        for raw_line in rc_path.read_text(encoding="utf-8-sig").splitlines():
             line = raw_line.strip()
             if not line or line.startswith("#") or line.startswith(";"):
                 continue
@@ -301,7 +335,7 @@ def npm_private_registry_context(project_roots: list[Path]) -> tuple[bool, set[s
         if not rc_path.is_file():
             continue
         try:
-            text = rc_path.read_text()
+            text = rc_path.read_text(encoding="utf-8-sig")
         except OSError:
             continue
         yarn_blanket, yarn_scopes = _parse_yarnrc_registries(text)
