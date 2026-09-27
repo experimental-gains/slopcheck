@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.33
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.34
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.33
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.34
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.33
+    rev: v0.1.34
     hooks:
       - id: slopcheck
 ```
@@ -367,6 +367,20 @@ current GitHub repos in exactly that shape: before this fix, their
 parses to zero dependencies — a silent "0 dependencies checked, all
 clean" false-all-clear, same failure shape as the `Pipfile` gap above,
 while every dependency actually declared in `setup.cfg` went unread.
+
+[PEP 518](https://peps.python.org/pep-0518/)'s `[build-system] requires`
+— a plain list of PEP 508 requirement strings naming the real PyPI
+packages pip installs into an isolated build environment *before*
+running the build at all, mandatory for any project pip can build from
+source and completely independent of `[project.dependencies]` — is now
+read too (fixed in v0.1.34). Confirmed real and current against numpy's
+own `pyproject.toml`: `[build-system] requires = ["meson-python>=0.20.0",
+"Cython>=3.1.0"]`, neither name appearing anywhere under `[project]`.
+Earlier versions had no reader for this table at all, so a hallucinated
+name planted only there — a real place for one to end up, since an AI
+assistant asked to scaffold a build backend can invent this list the
+same way it invents a runtime dependency — sailed through unchecked even
+though a real `pip install` from source genuinely installs it first.
 
 ## Private/internal registries
 

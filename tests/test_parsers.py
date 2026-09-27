@@ -516,6 +516,36 @@ def test_parse_pyproject_dependency_groups(tmp_path: Path):
     assert names == {"requests", "pytest", "time-machine", "mkdocs"}
 
 
+def test_parse_pyproject_build_system_requires(tmp_path: Path):
+    # PEP 518 makes [build-system] requires mandatory for any project pip
+    # can build from source — a plain list of PEP 508 requirement strings
+    # naming real PyPI packages pip installs into an isolated build
+    # environment *before* running the build, completely independent of
+    # [project.dependencies]. Confirmed real and current against numpy's
+    # actual pyproject.toml: [build-system] requires =
+    # ["meson-python>=0.20.0", "Cython>=3.1.0"] — neither name appears
+    # anywhere under [project]. Before this fix, this table had no reader
+    # at all: a hallucinated name planted only here (a real place for one
+    # to end up, since an AI assistant asked to scaffold a custom build
+    # backend can invent this list the same way it can invent a runtime
+    # dependency) was silently never checked, even though a real `pip
+    # install` from source genuinely installs it first.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [build-system]
+        requires = ["meson-python>=0.20.0", "Cython>=3.1.0"]
+        build-backend = "mesonpy"
+
+        [project]
+        name = "demo"
+        dependencies = ["requests"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "meson-python", "Cython"}
+
+
 def test_parse_pyproject_skips_self_referential_extras(tmp_path: Path):
     # PEP 621 explicitly supports a "self-referential extra": an entry in
     # [project.optional-dependencies] (or [dependency-groups]) that names

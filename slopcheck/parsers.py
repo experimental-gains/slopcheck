@@ -176,6 +176,36 @@ def _pep621_deps(data: dict) -> list[str]:
     return names
 
 
+def _build_system_deps(data: dict) -> list[str]:
+    """PEP 518's `[build-system] requires` — the packages pip installs into an isolated build env.
+
+    [PEP 518](https://peps.python.org/pep-0518/) makes this table mandatory
+    for any project pip can build from source, and it's a plain list of PEP
+    508 requirement strings (the same syntax as `[project.dependencies]`)
+    naming real PyPI packages pip installs *before* running the build at
+    all — e.g. `numpy`'s actual, current `pyproject.toml`: `[build-system]
+    requires = ["meson-python>=0.20.0", "Cython>=3.1.0"]`. Neither of those
+    names appears anywhere under `[project]`, so `_pep621_deps` (which only
+    reads `[project.dependencies]`/`[project.optional-dependencies]`) never
+    saw them, and this table had no reader at all anywhere in this module —
+    confirmed live: a `pyproject.toml` with a hallucinated name planted only
+    in `[build-system] requires` (alongside a real `[project.dependencies]`
+    entry that *was* checked) produced a clean report that checked just the
+    one real dependency and said nothing about the fabricated build
+    backend, a silent false negative on a field every modern
+    pyproject.toml-based project ships. Build requirements don't support
+    extras/markers referencing the project's own name (self-referential
+    extras are a `[project.optional-dependencies]`/`[dependency-groups]`
+    concept, not a build-system one) and don't participate in
+    `[tool.uv.sources]`/Poetry table-form git/path/url overrides — those are
+    scoped to regular dependency resolution, not the separate PEP 517
+    build-frontend install step — so, unlike `_pep621_deps`, nothing here
+    needs to be cross-referenced against `skip_names`.
+    """
+    build_system = data.get("build-system", {})
+    return list(build_system.get("requires", []))
+
+
 def _is_poetry_registry_dep(spec) -> bool:
     """Whether a Poetry dependency spec resolves against PyPI at all.
 
@@ -494,7 +524,12 @@ def _self_referential_name(data: dict) -> set[str]:
 
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
     data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    raw_specs = _pep621_deps(data) + _poetry_deps(data) + _dependency_groups_deps(data)
+    raw_specs = (
+        _pep621_deps(data)
+        + _poetry_deps(data)
+        + _dependency_groups_deps(data)
+        + _build_system_deps(data)
+    )
     skip_names = _uv_non_registry_names(data) | _self_referential_name(data)
     deps = []
     for spec in raw_specs:
