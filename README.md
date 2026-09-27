@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.39
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.40
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.39
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.40
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.39
+    rev: v0.1.40
     hooks:
       - id: slopcheck
 ```
@@ -178,6 +178,28 @@ at all).
 point somewhere other than the public registry, so slopcheck skips them
 rather than flagging every internal package name in a Turborepo/Nx/Lerna
 monorepo as "not found" (fixed in v0.1.1 — v0.1.0 falsely flagged these).
+
+A dependency version can also point at a git host with no recognized
+prefix at all — a bare `"user/repo"` shorthand (npm defaults this to
+GitHub), or the `gitlab:`/`bitbucket:` prefixed equivalents — which
+npm resolves via `git ls-remote` against that host, never the public
+registry, confirmed live (npm 9.2.0) against real GitHub, GitLab, and
+Bitbucket shorthand specs regardless of whether the named repo exists.
+Neither the un-prefixed form nor the `gitlab:`/`bitbucket:` prefixes
+were recognized before (only `github:user/repo` was), so a dependency
+written either way had its key checked against the public npm registry
+and flagged "not found" — a false positive on a real, common
+dependency shape (fixed in v0.1.40). Yarn Berry's own `patch:<name>@
+<descriptor>#<path>` protocol (applying a local patch on top of an
+otherwise normal dependency — real, current usage: babel/babel's own
+`package.json` patches `@rollup/plugin-commonjs` and
+`rollup-plugin-dts` this way) is deliberately *not* treated the same
+way even though a real one always contains a `/` (the patch file
+path): the wrapped descriptor is still a real registry reference
+(`npm%3A29.0.2` is `npm:29.0.2`, URL-encoded), and Yarn genuinely
+queries the registry for the named key before applying the patch —
+confirmed live (Yarn Berry 4.5.0) with a real 404 from
+`registry.yarnpkg.com` for a fake name inside a `patch:` spec.
 
 `npm:` aliases (`"my-name": "npm:real-package@1.2.3"`, used to depend on
 a package under a local rename or alongside another version of itself)
@@ -534,7 +556,7 @@ only the exact `YARN_NPM_REGISTRY_SERVER`/`YARN_RC_FILENAME` spellings
 were recognized until that fix.
 
 Bun has its own config file too, `bunfig.toml`, entirely independent
-of `.npmrc`/`.yarnrc.yml` (fixed in v0.1.39 — earlier versions had no
+of `.npmrc`/`.yarnrc.yml` (fixed in v0.1.40 — earlier versions had no
 reader for it at all). `[install].registry` (a plain URL string, or a
 `{ url = ..., token = ... }` table for an authenticated registry) is a
 blanket override, and `[install.scopes]` maps individual `@scope`
