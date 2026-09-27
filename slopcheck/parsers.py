@@ -668,6 +668,85 @@ _NON_REGISTRY_PREFIXES = ("workspace:", "file:", "link:", "portal:", "git:", "gi
 
 _NPM_ALIAS_PREFIX = "npm:"
 
+_NPM_PATCH_PREFIX = "patch:"
+
+
+def _npm_looks_like_hosted_git_or_path(version: str) -> bool:
+    """Whether an npm dependency's version value is a git-host shorthand or local path, not a registry range.
+
+    npm's own dependency resolver (npm-package-arg's `resolve()`, read
+    directly from `/usr/share/nodejs/npm-package-arg/lib/npa.js` on this box)
+    checks the version value against `HostedGit.fromUrl()` (recognizes
+    `github:`/`gitlab:`/`bitbucket:`/`gist:` shorthand, *and* the bare
+    `"user/repo"` form with no protocol at all, which defaults to GitHub)
+    first; if that doesn't match and the value isn't a URL, it falls back to
+    a blanket `hasSlashes.test(spec)` check and, if that matches, resolves it
+    as a local file/directory path instead of a registry spec — never the
+    public registry either way. Confirmed live (npm 9.2.0, `npm install
+    --dry-run`, a fake name under a version value with no other recognized
+    protocol): `"totally-hallucinated-name-xyz-987": "sindresorhus/is-odd"`
+    made npm run `git ls-remote ssh://git@github.com/sindresorhus/is-odd.git`
+    and never contact the npm registry for that name at all — the exact
+    silent-false-positive shape `_NON_REGISTRY_PREFIXES` already exists to
+    avoid for `github:user/repo`, just missing the un-prefixed shorthand
+    form and the `gitlab:`/`bitbucket:` prefixes (also confirmed live the
+    same way: both genuinely dispatch to `git ls-remote` against their own
+    host, `gitlab.com`/`bitbucket.org`, regardless of whether the named repo
+    exists). A single `"/" in version` check subsumes all of these at once,
+    matching npm's own fallback exactly, since no valid registry version
+    range, exact version, or dist-tag can ever contain a literal `/` (a
+    dist-tag containing one fails npm's own `encodeURIComponent` equality
+    check before it would ever reach the registry). Applied only to the
+    plain `dependencies`/`devDependencies`/`peerDependencies`/
+    `optionalDependencies` sections below: `overrides`/`resolutions` entries
+    already take the *key*, not this value, as the real registry name to
+    check (the key is what's being overridden, still a real package name
+    regardless of what non-registry source its replacement comes from), so
+    they're unaffected by this.
+
+    Deliberately does NOT match Yarn Berry's own `patch:<name>@<descriptor>#
+    <path>` protocol (applying a local patch file on top of an otherwise
+    normal dependency), even though a real one always contains a `/` (the
+    patch file path) and would otherwise trip this same fallback — found via
+    real-world testing against babel/babel's actual `package.json`, which
+    has exactly this shape for two real devDependencies patched with `yarn
+    patch`: `"@rollup/plugin-commonjs": "patch:@rollup/plugin-
+    commonjs@npm%3A29.0.2#~/.yarn/patches/....patch"`. Unlike the git-host/
+    file-path forms above, the wrapped descriptor here is still a real
+    registry reference (`npm%3A29.0.2` is `npm:29.0.2`, URL-encoded) — Yarn
+    resolves the *named key* from the registry first and only then applies
+    the patch on top, so the key remains exactly as checkable as an
+    ordinary dependency. Confirmed live (Yarn Berry 4.5.0, `yarn install`
+    against a scratch `patch:totally-hallucinated-name-xyz-987@npm%3A1.0.0#
+    ...` entry): Yarn genuinely queried `https://registry.yarnpkg.com/
+    totally-hallucinated-name-xyz-987` (a real npm registry mirror) and got
+    a real 404 for the fake name, rather than skipping registry resolution
+    the way the git-host-shorthand/local-path forms above do. Before this
+    carve-out, treating every `patch:`-prefixed value as non-registry (the
+    same blanket "any slash" rule applied to everything else) would have
+    silently dropped both of babel/babel's real patched dependencies from
+    checking — trading the git-shorthand false positive this function
+    exists to fix for a new false negative on an equally real, current
+    Yarn Berry pattern.
+    """
+    if version.startswith(_NPM_PATCH_PREFIX):
+        return False
+    return "/" in version
+
+
+def _npm_non_registry_version(version: str) -> bool:
+    """Whether an npm dependency's version value should be skipped rather than checked against the registry.
+
+    Combines the explicit `_NON_REGISTRY_PREFIXES` match (`workspace:`,
+    `file:`, etc. — protocols that can show up with no `/` in them at all,
+    e.g. `"workspace:*"`) with the broader git-host-shorthand-or-path
+    fallback above (protocols/forms that always contain a `/`, so checking
+    a prefix for them separately would be redundant, not just repetitive —
+    `ruff`'s SIM114 flags exactly that redundancy when the two checks are
+    left as sibling `elif` branches instead of merged here).
+    """
+    return version.startswith(_NON_REGISTRY_PREFIXES) or _npm_looks_like_hosted_git_or_path(version)
+
 
 def _npm_alias_target(spec: str) -> str:
     """Resolve the real package name behind an `npm:` alias spec.
@@ -756,7 +835,7 @@ def parse_package_json(path: Path) -> list[Dependency]:
         for name, version in data.get(section, {}).items():
             if isinstance(version, str) and version.startswith(_NPM_ALIAS_PREFIX):
                 name = _npm_alias_target(version)
-            elif isinstance(version, str) and version.startswith(_NON_REGISTRY_PREFIXES):
+            elif isinstance(version, str) and _npm_non_registry_version(version):
                 continue
             deps.append(Dependency(name, "npm", str(path)))
     for name in _npm_overrides_deps(data.get("overrides", {})):

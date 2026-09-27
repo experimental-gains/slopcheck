@@ -121,6 +121,64 @@ def test_parse_package_json_skips_non_registry_protocols(tmp_path: Path):
     assert names == {"react"}
 
 
+def test_parse_package_json_skips_bare_github_shorthand_and_other_git_hosts(tmp_path: Path):
+    # Confirmed live (npm 9.2.0, `npm install --dry-run --loglevel=verbose`):
+    # a bare "user/repo" version value (no "github:" prefix at all — npm
+    # defaults un-prefixed host shorthand to GitHub) makes npm run
+    # `git ls-remote ssh://git@github.com/sindresorhus/is-odd.git` and never
+    # contact the npm registry for the dependency's name at all, regardless
+    # of whether the named repo is real. "gitlab:user/repo" and
+    # "bitbucket:user/repo" dispatch the same way to their own hosts. None
+    # of these three forms were in `_NON_REGISTRY_PREFIXES` (only the
+    # "github:"-prefixed spelling was), so each hallucinated key here used
+    # to be checked against the public npm registry and flagged not_found —
+    # a false positive on a legitimate, real npm dependency shape.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "bare-shorthand": "sindresorhus/is-odd",
+                    "gitlab-shorthand": "gitlab:user/repo",
+                    "bitbucket-shorthand": "bitbucket:user/repo",
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"react"}
+
+
+def test_parse_package_json_still_checks_yarn_patch_protocol_deps(tmp_path: Path):
+    # Confirmed live (Yarn Berry 4.5.0, `yarn install` against a scratch
+    # "patch:totally-hallucinated-name-xyz-987@npm%3A1.0.0#~/patches/fake.patch"
+    # entry): Yarn genuinely queried the real npm registry mirror for the
+    # named key and got a real 404, unlike the git-host-shorthand/local-path
+    # forms the "/" heuristic above exists to catch. The exact shape here
+    # (name + patch value) mirrors babel/babel's own real package.json,
+    # which patches "@rollup/plugin-commonjs" and "rollup-plugin-dts" this
+    # way. Without the patch: carve-out, the "/" in the patch file path
+    # would make this indistinguishable from a git-host-shorthand value and
+    # silently drop a real, checkable dependency.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "devDependencies": {
+                    "@rollup/plugin-commonjs": (
+                        "patch:@rollup/plugin-commonjs@npm%3A29.0.2"
+                        "#~/.yarn/patches/@rollup-plugin-commonjs-npm-29.0.2-18c3a497d8.patch"
+                    ),
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"@rollup/plugin-commonjs", "react"}
+
+
 def test_parse_package_json_resolves_npm_alias_target(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
