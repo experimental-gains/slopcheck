@@ -212,11 +212,13 @@ def test_pip_config_paths_returns_known_locations_in_order(tmp_path: Path, monke
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_DIRS", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert private_registry._pip_config_paths() == [
         tmp_path / ".config" / "pip" / "pip.conf",
         tmp_path / ".pip" / "pip.conf",
+        Path("/etc/xdg/pip/pip.conf"),
         Path("/etc/pip.conf"),
     ]
 
@@ -229,6 +231,7 @@ def test_pip_config_paths_uses_xdg_config_home_when_set(tmp_path: Path, monkeypa
     platformdirs.unix.Unix.user_config_dir implementation exactly."""
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_DIRS", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     xdg = tmp_path / "customxdg"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
@@ -236,6 +239,7 @@ def test_pip_config_paths_uses_xdg_config_home_when_set(tmp_path: Path, monkeypa
     assert private_registry._pip_config_paths() == [
         xdg / "pip" / "pip.conf",
         tmp_path / ".pip" / "pip.conf",
+        Path("/etc/xdg/pip/pip.conf"),
         Path("/etc/pip.conf"),
     ]
 
@@ -250,6 +254,98 @@ def test_pip_config_paths_ignores_blank_xdg_config_home(tmp_path: Path, monkeypa
     monkeypatch.setenv("XDG_CONFIG_HOME", "")
 
     assert private_registry._pip_config_paths()[0] == tmp_path / ".config" / "pip" / "pip.conf"
+
+
+def test_pip_config_paths_uses_xdg_config_dirs_when_set(tmp_path: Path, monkeypatch):
+    """pip's *system-wide* ("global") config lookup moves the same way its
+    per-user one does, but via the sibling `XDG_CONFIG_DIRS` variable instead
+    of `XDG_CONFIG_HOME` — confirmed live two ways against real pip
+    (`pip install --dry-run -v` against an unreachable `127.0.0.1:9` index):
+    with no environment customization at all, a `/etc/xdg/pip/pip.conf` on
+    this box's real, unmodified filesystem was genuinely honored ("Looking in
+    indexes: https://pypi.org/simple, http://127.0.0.1:9/simple"); with
+    `XDG_CONFIG_DIRS` set to a custom path, the same pip.conf placed at
+    `$XDG_CONFIG_DIRS/pip/pip.conf` was read *instead of*
+    `/etc/xdg/pip/pip.conf` (platformdirs' own `_site_config_dirs` replaces,
+    not adds to, the XDG default), matching pip's vendored
+    platformdirs.unix.Unix._site_config_dirs implementation exactly."""
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    xdg_dirs = tmp_path / "customxdgdirs"
+    monkeypatch.setenv("XDG_CONFIG_DIRS", str(xdg_dirs))
+
+    assert private_registry._pip_config_paths() == [
+        tmp_path / ".config" / "pip" / "pip.conf",
+        tmp_path / ".pip" / "pip.conf",
+        xdg_dirs / "pip" / "pip.conf",
+        Path("/etc/pip.conf"),
+    ]
+
+
+def test_pip_config_paths_supports_multiple_colon_separated_xdg_config_dirs(tmp_path: Path, monkeypatch):
+    """`XDG_CONFIG_DIRS` is documented (and real pip/platformdirs actually
+    implement it) as a colon-separated *list* of directories, not a single
+    path — every one of them gets its own `pip.conf` check."""
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    monkeypatch.setenv("XDG_CONFIG_DIRS", f"{first}:{second}")
+
+    assert private_registry._pip_config_paths() == [
+        tmp_path / ".config" / "pip" / "pip.conf",
+        tmp_path / ".pip" / "pip.conf",
+        first / "pip" / "pip.conf",
+        second / "pip" / "pip.conf",
+        Path("/etc/pip.conf"),
+    ]
+
+
+def test_pip_config_paths_ignores_blank_xdg_config_dirs(tmp_path: Path, monkeypatch):
+    """Same blank-value footgun rule as `XDG_CONFIG_HOME`: real platformdirs
+    checks `if not path.strip()`, so `export XDG_CONFIG_DIRS=` falls back to
+    the default `/etc/xdg`, the same as when it's unset entirely."""
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_DIRS", "")
+
+    assert private_registry._pip_config_paths() == [
+        tmp_path / ".config" / "pip" / "pip.conf",
+        tmp_path / ".pip" / "pip.conf",
+        Path("/etc/xdg/pip/pip.conf"),
+        Path("/etc/pip.conf"),
+    ]
+
+
+def test_pip_private_index_from_xdg_config_dirs_pip_conf(tmp_path: Path, monkeypatch):
+    """End-to-end regression for the XDG_CONFIG_DIRS gap: a private index
+    configured only via `$XDG_CONFIG_DIRS/pip/pip.conf` (pip's real,
+    genuinely-default *system-wide* config location — confirmed live, see
+    `_pip_site_config_dirs`'s doc comment) must be detected, since a real
+    `pip install` in that exact environment resolves it fine. Before this
+    fix, `_pip_config_paths` never looked here at all, so this always
+    returned False, and the caller (cli._downgrade_if_private) would report
+    a legitimately-installable private-only dependency as a plain
+    `not_found` hallucination instead of `private`/unverified."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    xdg_dirs = tmp_path / "customxdgdirs"
+    monkeypatch.setenv("XDG_CONFIG_DIRS", str(xdg_dirs))
+    conf_dir = xdg_dirs / "pip"
+    conf_dir.mkdir(parents=True)
+    (conf_dir / "pip.conf").write_text("[global]\nextra-index-url = https://pypi.internal.example/simple\n")
+
+    assert pip_private_index_configured([]) is True
 
 
 def test_pip_private_index_from_xdg_config_home_pip_conf(tmp_path: Path, monkeypatch):

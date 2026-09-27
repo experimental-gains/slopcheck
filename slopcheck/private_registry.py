@@ -76,6 +76,46 @@ def _pip_user_config_dir() -> Path:
     return Path.home() / ".config" / "pip"
 
 
+def _pip_site_config_dirs() -> list[Path]:
+    """Where pip looks for its system-wide ("global") config file(s), on Linux.
+
+    Mirrors pip's own resolution exactly (pip._internal.utils.appdirs.
+    site_config_dirs -> pip._vendor.platformdirs.unix.Unix._site_config_dirs):
+    every directory named by `$XDG_CONFIG_DIRS` (colon-separated, falling back
+    to the single default `/etc/xdg` when unset *or* blank — the same
+    non-blank-value rule `_pip_user_config_dir` already applies to
+    `XDG_CONFIG_HOME`) gets `/pip` appended, and each resulting directory is
+    checked for `pip.conf` — in *addition* to, not instead of, the separate
+    hardcoded `/etc/pip.conf` this file already checks (pip's own
+    `get_configuration_files` appends a bare `"/etc"` to this same list,
+    joined with the config basename the same way `_pip_config_paths` already
+    does).
+
+    Confirmed live with real pip, two ways: (1) with no environment
+    customization at all — this box's real, unmodified default — a
+    `/etc/xdg/pip/pip.conf` setting `extra-index-url` made `pip install
+    --dry-run -v` against a fake package name genuinely show "Looking in
+    indexes: https://pypi.org/simple, http://127.0.0.1:9/simple", proof pip
+    reads this location by default, not just under a hypothetical XDG setup;
+    (2) with `XDG_CONFIG_DIRS` set to a custom path, the same pip.conf placed
+    at `$XDG_CONFIG_DIRS/pip/pip.conf` instead was read the same way, with
+    `/etc/xdg/pip/pip.conf` no longer consulted (`platformdirs.site_config_dir`
+    confirmed via direct call to replace, not add to, the XDG default —
+    `XDG_CONFIG_DIRS=/custom/xdg` genuinely produced `/custom/xdg/pip` and
+    nothing else). Before this fix, `_pip_config_paths` only ever checked
+    `/etc/pip.conf`, so a private index configured via this real, genuinely
+    default pip config location (a real deployment pattern: a Linux distro or
+    Docker base image dropping a managed pip.conf here, the *actual* place
+    the "global" config pip's own docs promise, not merely a
+    `/etc/pip.conf`-adjacent guess) was invisible to this tool — a
+    genuinely private-only dependency misreported as a plain `not_found`
+    hallucination instead of downgraded to `private`.
+    """
+    raw = os.environ.get("XDG_CONFIG_DIRS", "")
+    dirs = raw.split(os.pathsep) if raw.strip() else ["/etc/xdg"]
+    return [Path(d) / "pip" for d in dirs]
+
+
 def _pip_config_paths() -> list[Path]:
     paths = []
     env_path = os.environ.get("PIP_CONFIG_FILE")
@@ -86,6 +126,7 @@ def _pip_config_paths() -> list[Path]:
         paths.append(Path(virtual_env) / "pip.conf")
     paths.append(_pip_user_config_dir() / "pip.conf")
     paths.append(Path.home() / ".pip" / "pip.conf")
+    paths.extend(site_dir / "pip.conf" for site_dir in _pip_site_config_dirs())
     paths.append(Path("/etc/pip.conf"))
     return paths
 
