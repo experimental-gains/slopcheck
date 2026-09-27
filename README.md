@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.40
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.41
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.40
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.41
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.40
+    rev: v0.1.41
     hooks:
       - id: slopcheck
 ```
@@ -448,6 +448,25 @@ resolving dependencies ... was not found in the package registry").
 Earlier versions had no reader for either table, so a hallucinated
 name planted in one sailed through unchecked even though a real
 `hatch env create` genuinely installs it.
+
+The `[tool.uv.sources]` git/path/workspace/url skip above (the one that
+keeps `marimo_docs` from being flagged) was, until v0.1.41, applied to
+*every* dependency-bearing table's output at once, including
+`[build-system] requires` and Hatch's own `[tool.hatch.env]`/
+`[tool.hatch.envs.*]` tables — even though neither is resolved by uv,
+or consults `[tool.uv.sources]` at all (fixed in v0.1.41). Confirmed
+live (venv + pip 25.x): a `pyproject.toml` with `[tool.uv.sources]
+totally-hallucinated-buildreq-xyz-123 = { path = "./local-pkg" }` and
+`[build-system] requires = ["setuptools",
+"totally-hallucinated-buildreq-xyz-123"]` made `pip install .`
+genuinely try to fetch that exact name from PyPI while installing
+build dependencies (pip's build-isolation step never parses
+`[tool.uv.sources]` — that table means nothing outside uv itself) and
+fail with "Could not find a version that satisfies the requirement
+... (from versions: none)". Before this fix, slopcheck against the
+same file reported "2 dependencies checked, all clean", silently
+skipping the fabricated build dependency purely because its name
+happened to collide with an unrelated `[tool.uv.sources]` entry.
 
 ## Private/internal registries
 
