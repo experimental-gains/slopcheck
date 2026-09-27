@@ -633,14 +633,37 @@ def _self_referential_name(data: dict) -> set[str]:
 
 
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
+    # skip_names (derived from [tool.uv.sources]'s git/path/workspace/url
+    # entries and the project's own self-referential-extra name) only means
+    # something for the *regular* dependency resolver — uv/pip reading
+    # [project.dependencies]/[project.optional-dependencies]/
+    # [dependency-groups]/[tool.pdm.dev-dependencies]/[tool.poetry.*], the
+    # one thing [tool.uv.sources] actually overrides. [build-system]
+    # requires and Hatch's [tool.hatch.env]/[tool.hatch.envs.*] tables are
+    # resolved by two completely separate mechanisms that never consult
+    # [tool.uv.sources] at all: a PEP 517 isolated build environment (plain
+    # pip, with no notion of uv-specific config) and Hatch's own env
+    # manager. Confirmed live (venv + pip 25.x, this box): a pyproject.toml
+    # with `[tool.uv.sources] totally-hallucinated-buildreq-xyz-123 = {
+    # path = "./local-pkg" }` and `[build-system] requires = ["setuptools",
+    # "totally-hallucinated-buildreq-xyz-123"]` made `pip install .`
+    # genuinely try to fetch that name from PyPI while installing build
+    # dependencies and fail ("Could not find a version that satisfies the
+    # requirement ... (from versions: none)") — pip's build-isolation step
+    # never parses [tool.uv.sources]. Before this fix, both tables' output
+    # was folded into the same raw_specs list as the project-level tables
+    # and filtered through the same skip_names set, so a name that merely
+    # happened to collide with an unrelated [tool.uv.sources] entry (or the
+    # project's own name) got silently skipped here too — the same false
+    # negative _build_system_deps's/_hatch_deps's own docstrings already
+    # describe (neither participates in [tool.uv.sources] overrides), just
+    # not actually enforced by this function until now.
     data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     raw_specs = (
         _pep621_deps(data)
         + _poetry_deps(data)
         + _dependency_groups_deps(data)
         + _pdm_dev_deps(data)
-        + _build_system_deps(data)
-        + _hatch_deps(data)
     )
     skip_names = _uv_non_registry_names(data) | _self_referential_name(data)
     deps = []
@@ -651,6 +674,10 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
             if _normalize_name(name) in skip_names:
                 continue
             deps.append(Dependency(name, "pypi", str(path)))
+    for spec in _build_system_deps(data) + _hatch_deps(data):
+        match = _REQ_LINE_RE.match(spec.strip())
+        if match:
+            deps.append(Dependency(match.group("name"), "pypi", str(path)))
     for dep in _setuptools_dynamic_deps(data, path.parent):
         if _normalize_name(dep.name) in skip_names:
             continue

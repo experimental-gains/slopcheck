@@ -680,6 +680,65 @@ def test_parse_pyproject_build_system_requires(tmp_path: Path):
     assert names == {"requests", "meson-python", "Cython"}
 
 
+def test_parse_pyproject_uv_sources_skip_does_not_leak_into_build_system_or_hatch(
+    tmp_path: Path,
+):
+    # [tool.uv.sources]'s git/path/workspace/url skip exists for one reason:
+    # those protocols mean the *regular* dependency resolver (uv, reading
+    # [project.dependencies]/[dependency-groups]) won't ask the index for
+    # that name at all. [build-system] requires and Hatch's own
+    # [tool.hatch.env]/[tool.hatch.envs.*] tables are resolved by entirely
+    # separate mechanisms — a PEP 517 isolated build environment (plain pip,
+    # with zero knowledge of uv-specific config) and Hatch's own env
+    # manager, respectively — neither of which consults [tool.uv.sources] at
+    # all. Before this fix, parse_pyproject_toml built one combined
+    # raw_specs list from every table (PEP 621, Poetry, dependency-groups,
+    # PDM, *and* build-system/Hatch) and ran the *same* skip_names set
+    # (derived only from [tool.uv.sources]/self-referential-extra rules)
+    # over the whole thing, so a name that happened to also appear in
+    # [build-system] requires or a Hatch env table got silently skipped too,
+    # purely by name collision with an unrelated uv.sources entry.
+    #
+    # Confirmed live (this box, venv + pip 25.x): a pyproject.toml with
+    # `[tool.uv.sources] totally-hallucinated-buildreq-xyz-123 = { path =
+    # "./local-pkg" }` and `[build-system] requires = ["setuptools",
+    # "totally-hallucinated-buildreq-xyz-123"]` made `pip install .`
+    # genuinely try to fetch "totally-hallucinated-buildreq-xyz-123" from
+    # PyPI while installing build dependencies (pip's build-isolation step
+    # never parses [tool.uv.sources] — that table is uv-specific, not a PEP
+    # 517/518 concept) and fail with "Could not find a version that
+    # satisfies the requirement ... (from versions: none)". Before this
+    # fix, slopcheck against the same file reported "2 dependencies checked,
+    # all clean" (setuptools + requests only) — a silent false negative on
+    # exactly the fabricated name real pip tries and fails to install.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo-project"
+        dependencies = ["requests"]
+
+        [tool.uv.sources]
+        totally-hallucinated-buildreq-xyz-123 = { path = "./local-pkg" }
+        totally-hallucinated-hatch-plugin-xyz-987 = { workspace = true }
+
+        [build-system]
+        requires = ["setuptools", "totally-hallucinated-buildreq-xyz-123"]
+        build-backend = "setuptools.build_meta"
+
+        [tool.hatch.env]
+        requires = ["totally-hallucinated-hatch-plugin-xyz-987"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {
+        "requests",
+        "setuptools",
+        "totally-hallucinated-buildreq-xyz-123",
+        "totally-hallucinated-hatch-plugin-xyz-987",
+    }
+
+
 def test_parse_pyproject_skips_self_referential_extras(tmp_path: Path):
     # PEP 621 explicitly supports a "self-referential extra": an entry in
     # [project.optional-dependencies] (or [dependency-groups]) that names
