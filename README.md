@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.35
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.36
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.35
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.36
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.35
+    rev: v0.1.36
     hooks:
       - id: slopcheck
 ```
@@ -393,6 +393,21 @@ Earlier versions only read `install_requires`/`extras_require`, so a
 hallucinated name planted only in `setup_requires` sailed through
 unchecked even though a real build genuinely installs it first — the
 same failure shape as the `[build-system] requires` gap above.
+
+PDM's own legacy `[tool.pdm.dev-dependencies]` table — predates PEP 735,
+structurally identical to `[dependency-groups]` (group name -> list of
+PEP 508 requirement strings) but under a different, PDM-specific table
+— is now read too (fixed in v0.1.36). Confirmed live against real PDM
+2.29.2: `pdm lock -v` run against a `pyproject.toml` with a fake name
+planted only in `[tool.pdm.dev-dependencies]` genuinely tried to
+resolve it from PyPI (`CandidateNotFound: Unable to find candidates
+for ...`), so a real `pdm install`/`pdm lock` installs whatever's
+planted here just as much as a `[dependency-groups]` entry — this
+table isn't deprecated or inert even though PDM's own `pdm add -dG`
+now defaults to writing `[dependency-groups]` instead. Earlier versions
+had no reader for this table at all, so a hallucinated name planted
+only in a still-common, still-honored PDM dev-dependency group sailed
+through unchecked.
 
 ## Private/internal registries
 
