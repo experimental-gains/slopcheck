@@ -82,7 +82,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.46
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.47
 ```
 
 ## Usage
@@ -108,7 +108,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.46
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.47
     slopcheck
 ```
 
@@ -117,7 +117,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.46
+    rev: v0.1.47
     hooks:
       - id: slopcheck
 ```
@@ -262,14 +262,14 @@ silently checked almost nothing. `node_modules` (already-*installed*
 packages, not declared ones) and dot-directories (`.git`, `.venv`,
 etc.) are pruned from the walk, and so are the common non-dot-prefixed
 virtualenv directory names `venv`, `env`, `ENV`, `venv.bak`, and
-`env.bak` — Python's own `venv` module docs say environments are
-"conventionally named `.venv` or `venv`", and GitHub's official
-`Python.gitignore` template lists all five as equally real. A plain
-`venv` (no dot) sitting inside the scanned tree can carry an installed
-package's own bundled manifest the same way `.venv` already could:
-confirmed live, a fresh `venv` with pandas installed carries pandas'
-own `pyproject.toml`, adding 90 dependency specs unrelated to the
-project actually being scanned.
+`env.bak` (fixed in v0.1.47) — Python's own `venv` module docs say
+environments are "conventionally named `.venv` or `venv`", and
+GitHub's official `Python.gitignore` template lists all five as
+equally real. A plain `venv` (no dot) sitting inside the scanned tree
+can carry an installed package's own bundled manifest the same way
+`.venv` already could: confirmed live, a fresh `venv` with pandas
+installed carries pandas' own `pyproject.toml`, adding 90 dependency
+specs unrelated to the project actually being scanned.
 
 A manifest file with a leading UTF-8 byte-order mark — common from
 Windows-authored files, and real enough that `vitejs/vite`'s own repo
