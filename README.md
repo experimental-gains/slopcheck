@@ -36,7 +36,7 @@ against the real registry (PyPI or npm), and flags:
   to reach it, but `--fail-on`'s own `choices=[...]` never listed one).
 
 An unpublished npm package now reports **not found**, not "recent" or
-"ok" (fixed in v0.1.50). `registry.npmjs.org` keeps answering `GET
+"ok" (fixed in v0.1.51). `registry.npmjs.org` keeps answering `GET
 /<name>` with HTTP 200 for an unpublished package — the document
 retains its original `time.created` and adds a `time.unpublished`
 marker, but drops `versions` — while real npm tooling (`npm view`/
@@ -51,7 +51,7 @@ long after its original release) — both implying npm can still
 install it when it no longer can.
 
 `setup.cfg`'s `install_requires`/`[options.extras_require]` now follow
-setuptools' own `file:` directive (fixed in v0.1.50). `install_requires
+setuptools' own `file:` directive (fixed in v0.1.51). `install_requires
 = file:requirements.txt` is real, current setuptools syntax — the
 value doesn't name a package, it points at a file (or comma-separated
 list of files, relative to the directory containing `setup.cfg`) whose
@@ -67,6 +67,22 @@ doesn't match it (`:` isn't a valid name/version-specifier character),
 so every dependency in the referenced file was silently never checked
 — slopcheck reported "0 dependencies checked, all clean" against a
 `setup.cfg` that setuptools itself resolves to real, live dependencies.
+
+npm's `"gist:"` git-host shorthand is now recognized as a non-registry
+dependency source, alongside the already-handled `"github:"`/
+`"gitlab:"`/`"bitbucket:"`/bare-shorthand forms (fixed in v0.1.51).
+npm's own docs list `gist:` as a fourth documented git-host prefix, and
+npm-package-arg's `HostedGit.fromUrl()` dispatches it to git exactly
+like the other three — but a real gist reference is just a bare gist
+ID with no `/` at all (e.g. `gist:101a11beef`), so the existing
+slash-based fallback that catches the other hosts' shorthand never
+caught it. Confirmed live (npm 11.20.0): a hallucinated dependency name
+paired with a `gist:`-prefixed version value made `npm install` run
+`git ls-remote ssh://git@gist.github.com/<id>.git` and never contact
+the npm registry at all, regardless of whether the gist exists. Before
+this fix, slopcheck checked the literal name against the npm registry
+and reported it "NOT FOUND" — a false positive on a legitimate, real
+npm dependency shape.
 
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
@@ -115,7 +131,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.50
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.51
 ```
 
 ## Usage
@@ -141,7 +157,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.50
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.51
     slopcheck
 ```
 
@@ -150,7 +166,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.50
+    rev: v0.1.51
     hooks:
       - id: slopcheck
 ```
