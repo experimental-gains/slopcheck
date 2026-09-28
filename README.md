@@ -103,6 +103,25 @@ depending on how old the yanked upload was, both implying an
 installable package when an unqualified `pip install` genuinely can't
 resolve one.
 
+A PyPI project with a registered release version that has zero
+uploaded files now reports **not found**, not "ok" (fixed in
+v0.1.53). PyPI's JSON API can return HTTP 200 for a project with a
+release entry like `"releases": {"0.0.0": []}` — a version exists but
+nothing was ever uploaded for it — confirmed live against a real,
+currently-registered project,
+[`requests_extension`](https://pypi.org/pypi/requests_extension/json).
+Real pip 25.1.1 fails an unqualified `pip install requests_extension`
+outright with "Could not find a version that satisfies the
+requirement ... (from versions: none)" / "No matching distribution
+found" — the identical failure shape as a name that was never
+registered at all. Before this fix, slopcheck flattened every
+release's file list, found it empty, and fell straight into the
+"can't determine an age, so ok" fallback without ever noticing there
+was nothing installable to begin with. A project with no `releases`
+key/dict at all is left alone (still "ok") — that shape doesn't appear
+reachable for a genuine 200 response, since PyPI never creates a
+project record without at least one completed release.
+
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
 Those are pip's and npm's own errors for exactly this situation — a
@@ -150,7 +169,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.52
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.53
 ```
 
 ## Usage
@@ -176,7 +195,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.52
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.53
     slopcheck
 ```
 
@@ -185,7 +204,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.52
+    rev: v0.1.53
     hooks:
       - id: slopcheck
 ```
