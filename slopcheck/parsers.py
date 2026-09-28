@@ -855,6 +855,112 @@ def _yarn_resolution_target(pattern: str) -> str:
     return _strip_version_suffix(segments[-1])
 
 
+def _npm_workspace_patterns(data: dict) -> list[str]:
+    """Extract glob patterns from a package.json's `workspaces` field.
+
+    npm (native workspaces, npm 7+) and Yarn Classic (v1) both accept either
+    the plain array form (`"workspaces": ["packages/*"]`) or Yarn Classic's
+    object form (`"workspaces": {"packages": [...], "nohoist": [...]}`) --
+    `nohoist` is a hoisting hint, not a member-location pattern, so only
+    `packages` is read from the object form.
+    """
+    workspaces = data.get("workspaces")
+    if isinstance(workspaces, list):
+        return [p for p in workspaces if isinstance(p, str)]
+    if isinstance(workspaces, dict):
+        return [p for p in workspaces.get("packages", []) if isinstance(p, str)]
+    return []
+
+
+def npm_workspace_member_names(package_json_paths: list[Path]) -> list[tuple[Path, set[str]]]:
+    """For every package.json declaring `workspaces`, the local package names it resolves without the registry.
+
+    npm (native workspaces, npm 7+) and Yarn Classic (v1) both let a
+    package.json list one or more sibling packages under `workspaces` (a
+    glob pattern like `"packages/*"`) and then depend on a matching sibling
+    by its ordinary declared name with a plain semver range or `"*"` --
+    *not* pnpm's/Yarn Berry's explicit `workspace:` protocol prefix, which
+    `_NON_REGISTRY_PREFIXES` above already skips. A real `npm install`/
+    `yarn install` resolves that name entirely locally (a symlink into the
+    workspace directory) and never queries the public registry for it at
+    all. Confirmed live (npm 9.2.0 and Yarn Classic 1.22.22, a from-scratch
+    two-package workspace: root `{"workspaces": ["packages/*"], "devDependencies":
+    {"@scratch/internal-lib": "^1.0.0"}}`, member `packages/internal-lib/
+    package.json` = `{"name": "@scratch/internal-lib", "version": "1.0.0",
+    "private": true}`): `npm install --loglevel silly` traced
+    `placeDep ROOT @scratch/internal-lib@1.0.0 ... want: file:.../packages/
+    internal-lib` and made zero `registry.npmjs.org` requests for that name
+    (the only registry hit was an unrelated bulk security-advisory POST),
+    and `yarn install --verbose` logged `Creating symlink ... to
+    ".../packages/internal-lib"` with no `registry.yarnpkg.com` request
+    either -- and both still resolved it purely locally even when the
+    declared range didn't actually satisfy the local package's version
+    (`^2.0.0` against a local `1.0.0`), so no version-compatibility check is
+    needed here, just a name match.
+
+    Real and current, not a hypothetical: npm's own monorepo (npm/cli)
+    dogfoods exactly this pattern -- its root `package.json` lists
+    `"@npmcli/docs": "^1.0.0"`, `"@npmcli/mock-registry": "^1.0.0"`, and
+    `"@npmcli/mock-globals": "^1.0.0"` in `devDependencies` as plain semver
+    ranges with no `workspace:` prefix, and each of those packages' own
+    package.json is `"private": true` -- confirmed live, all three names
+    genuinely 404 on `registry.npmjs.org` (never published, intentionally).
+    Before this fix, scanning that repo (or any real npm/Yarn-Classic-
+    workspaces monorepo shaped this way -- the *default* layout for Lerna,
+    Nx, and Turborepo projects, not an obscure one) reported every private,
+    unpublished workspace member as a plain `not_found` "hallucinated"
+    dependency: a false positive on the single most common JS monorepo
+    structure.
+
+    Returns a list of (workspace root directory, member names) pairs rather
+    than one flat set, so a caller can scope the skip to dependents actually
+    inside that workspace's own directory subtree -- avoiding a false
+    negative if an unrelated project happens to be scanned in the same run
+    and coincidentally declares a same-named but genuinely *external*
+    dependency that was never meant to resolve locally.
+    """
+    pairs: list[tuple[Path, set[str]]] = []
+    for path in package_json_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        patterns = _npm_workspace_patterns(data)
+        if not patterns:
+            continue
+        root = path.parent
+        names: set[str] = set()
+        for pattern in patterns:
+            # A leading "!" negates a pattern (excludes matches an earlier,
+            # broader pattern already matched) -- not modeled here; treating
+            # a negated pattern's matches the same as any other only risks
+            # the same safe over-approximation this module already accepts
+            # elsewhere (e.g. `uv_private_registry_context`'s docstring:
+            # wrongly skipping a name beats wrongly flagging a real local
+            # package as a hallucination).
+            glob_pattern = pattern[1:] if pattern.startswith("!") else pattern
+            try:
+                matches = list(root.glob(glob_pattern))
+            except (ValueError, NotImplementedError):
+                continue
+            for member_dir in matches:
+                member_pkg = member_dir / "package.json"
+                if not member_pkg.is_file():
+                    continue
+                try:
+                    member_data = json.loads(member_pkg.read_text(encoding="utf-8-sig"))
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                name = member_data.get("name")
+                if isinstance(name, str):
+                    names.add(name)
+        if names:
+            pairs.append((root, names))
+    return pairs
+
+
 def parse_package_json(path: Path) -> list[Dependency]:
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     deps = []

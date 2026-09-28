@@ -11,6 +11,7 @@ from .parsers import (
     ManifestParseError,
     _normalize_name,
     find_manifests,
+    npm_workspace_member_names,
     parse_manifest,
     requirements_txt_files_touched,
 )
@@ -78,10 +79,28 @@ def _dedupe_key(dep: Dependency) -> tuple[str, str]:
     return (dep.ecosystem, dep.name)
 
 
+def _is_npm_workspace_member(dep: Dependency, workspace_pairs: list[tuple[Path, set[str]]]) -> bool:
+    if dep.ecosystem != "npm":
+        return False
+    dep_dir = Path(dep.source).resolve().parent
+    return any(dep.name in names and dep_dir.is_relative_to(root.resolve()) for root, names in workspace_pairs)
+
+
 def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, LookupResult]]:
     deps: list[Dependency] = []
     for path in paths:
         deps.extend(parse_manifest(path))
+
+    # A name that's actually a sibling npm/Yarn-Classic workspace member
+    # (declared via the ordinary `workspaces` field, not the `workspace:`
+    # protocol `_NON_REGISTRY_PREFIXES` already skips at parse time) never
+    # reaches the registry for a real `npm install`/`yarn install` — see
+    # `npm_workspace_member_names`'s docstring. Filtered out here, before
+    # dedup/counting, the same "never became a checkable dependency at all"
+    # treatment an ordinary `workspace:*`-prefixed entry already gets.
+    workspace_pairs = npm_workspace_member_names([p for p in paths if p.name == "package.json"])
+    if workspace_pairs:
+        deps = [d for d in deps if not _is_npm_workspace_member(d, workspace_pairs)]
 
     # De-dupe same name+ecosystem across files, keep first source for reporting.
     seen: dict[tuple[str, str], Dependency] = {}

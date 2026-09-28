@@ -403,6 +403,63 @@ def test_bunfig_scope_downgrades_scoped_package(tmp_path: Path, monkeypatch):
     assert results[0][1].status == "private"
 
 
+def test_npm_workspace_member_skipped_not_flagged_not_found(tmp_path: Path):
+    # Real-world false positive: confirmed live (npm 9.2.0, real
+    # `npm install --loglevel silly` against a from-scratch two-package
+    # workspace) that a package.json `devDependencies` entry naming a
+    # sibling workspace package with an ordinary semver range (no
+    # `workspace:` protocol prefix) resolves entirely locally -- npm's own
+    # trace showed it symlinking the local directory and never once
+    # querying `registry.npmjs.org` for that name. Real and current: npm's
+    # own monorepo (npm/cli) dogfoods exactly this shape -- its root
+    # package.json lists `"@npmcli/docs": "^1.0.0"` in `devDependencies`
+    # with `@npmcli/docs` a `"private": true` package that genuinely 404s
+    # on the public registry. Before the fix, `scan()` had zero notion of
+    # the plain `workspaces` field and reported every such name as a plain
+    # `not_found` hallucination.
+    (tmp_path / "package.json").write_text(
+        json.dumps({"workspaces": ["packages/*"], "devDependencies": {"@scratch/internal-lib": "^1.0.0"}})
+    )
+    member = tmp_path / "packages" / "internal-lib"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "@scratch/internal-lib", "private": True}))
+
+    with patch.dict(cli.CHECKERS, {"npm": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert results == []
+
+
+def test_npm_workspace_member_scoping_does_not_hide_an_unrelated_project_with_the_same_name(tmp_path: Path):
+    # A workspace member name is only ever resolved locally *within* that
+    # workspace's own directory subtree -- an unrelated project elsewhere in
+    # the same scan that happens to name an ordinary (non-local) dependency
+    # the same thing must still be checked normally, since a real
+    # `npm install` run from that other project's own directory has no
+    # notion of the first project's workspace at all.
+    workspace_root = tmp_path / "monorepo"
+    workspace_root.mkdir()
+    (workspace_root / "package.json").write_text(json.dumps({"workspaces": ["packages/*"]}))
+    member = workspace_root / "packages" / "internal-lib"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "@scratch/internal-lib", "private": True}))
+
+    other_project = tmp_path / "unrelated-project"
+    other_project.mkdir()
+    (other_project / "package.json").write_text(
+        json.dumps({"dependencies": {"@scratch/internal-lib": "^1.0.0"}})
+    )
+
+    with patch.dict(cli.CHECKERS, {"npm": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert len(results) == 1
+    dep, result = results[0]
+    assert dep.name == "@scratch/internal-lib"
+    assert str(other_project) in dep.source
+    assert result.status == "not_found"
+
+
 def test_print_report_labels_and_detail_formatting(capsys):
     # Regression test for a large family of mutmut survivors in
     # `_print_report`'s `labels` dict and detail-string formatting.

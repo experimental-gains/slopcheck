@@ -4,6 +4,7 @@ from pathlib import Path
 from slopcheck.parsers import (
     ManifestParseError,
     find_manifests,
+    npm_workspace_member_names,
     parse_manifest,
     parse_package_json,
     parse_pipfile,
@@ -119,6 +120,49 @@ def test_parse_package_json_skips_non_registry_protocols(tmp_path: Path):
     )
     names = {dep.name for dep in parse_package_json(pkg)}
     assert names == {"react"}
+
+
+def test_npm_workspace_member_names_from_array_and_object_forms(tmp_path: Path):
+    # Regression test for a real-world find: confirmed live (npm 9.2.0 and
+    # Yarn Classic 1.22.22) that a plain `"workspaces": ["packages/*"]`
+    # array declares real, local-only sibling packages a real
+    # `npm install`/`yarn install` resolves entirely locally (symlinked, no
+    # registry request) whenever a dependent names one with an ordinary
+    # semver range -- not just the explicit `workspace:` protocol form
+    # `_NON_REGISTRY_PREFIXES` already skips. Yarn Classic's own
+    # object-form `"workspaces": {"packages": [...], "nohoist": [...]}` is
+    # equally real and must resolve the same set of names, ignoring the
+    # unrelated `nohoist` hint.
+    root = tmp_path / "array-form"
+    root.mkdir()
+    (root / "package.json").write_text(json.dumps({"workspaces": ["packages/*"]}))
+    member = root / "packages" / "internal-lib"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "@scratch/internal-lib", "private": True}))
+
+    obj_root = tmp_path / "object-form"
+    obj_root.mkdir()
+    (obj_root / "package.json").write_text(
+        json.dumps({"workspaces": {"packages": ["packages/*"], "nohoist": ["**/react"]}})
+    )
+    obj_member = obj_root / "packages" / "other-lib"
+    obj_member.mkdir(parents=True)
+    (obj_member / "package.json").write_text(json.dumps({"name": "@scratch/other-lib"}))
+
+    pairs = npm_workspace_member_names(
+        [root / "package.json", member / "package.json", obj_root / "package.json", obj_member / "package.json"]
+    )
+
+    pairs_by_root = dict(pairs)
+    assert pairs_by_root[root] == {"@scratch/internal-lib"}
+    assert pairs_by_root[obj_root] == {"@scratch/other-lib"}
+
+
+def test_npm_workspace_member_names_ignores_non_workspace_package_json(tmp_path: Path):
+    plain = tmp_path / "package.json"
+    plain.write_text(json.dumps({"dependencies": {"left-pad": "^1.0.0"}}))
+
+    assert npm_workspace_member_names([plain]) == []
 
 
 def test_parse_package_json_skips_bare_github_shorthand_and_other_git_hosts(tmp_path: Path):
