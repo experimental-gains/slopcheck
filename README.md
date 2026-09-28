@@ -84,6 +84,25 @@ this fix, slopcheck checked the literal name against the npm registry
 and reported it "NOT FOUND" — a false positive on a legitimate, real
 npm dependency shape.
 
+A PyPI package whose every release has been yanked now reports **not
+found**, not "ok" or "recent" (fixed in v0.1.52). PyPI's JSON API
+keeps a per-file `yanked` flag but says nothing about installability
+directly, and PEP 592 makes a real installer ignore every yanked
+release unless a caller pins its exact version (`==`/`===`) — slopcheck
+never sees or checks version pins at all (it only checks whether a
+*name* exists), so it always models the unqualified `pip install
+<name>` case, the one PEP 592 makes fail outright once every uploaded
+file is yanked. Confirmed live with real pip 25.1.1 against a
+from-scratch local index: a package with a single, fully-yanked
+release made `pip install <name>` (no version pin) genuinely fail with
+"No matching distribution found" — the identical failure shape as a
+name that was never published — while pinning the exact yanked version
+still installed it (with a warning). Before this fix, slopcheck read
+only the upload timestamp and reported such a package "ok" or "recent"
+depending on how old the yanked upload was, both implying an
+installable package when an unqualified `pip install` genuinely can't
+resolve one.
+
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
 Those are pip's and npm's own errors for exactly this situation — a
@@ -131,7 +150,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.51
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.52
 ```
 
 ## Usage
@@ -157,7 +176,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.51
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.52
     slopcheck
 ```
 
@@ -166,7 +185,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.51
+    rev: v0.1.52
     hooks:
       - id: slopcheck
 ```
