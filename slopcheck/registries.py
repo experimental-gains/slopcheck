@@ -60,11 +60,28 @@ def check_pypi(name: str) -> LookupResult:
     if data is None:
         return LookupResult("not_found", "no such project on PyPI")
 
-    release_files = [
-        file_info
-        for release_files in data.get("releases", {}).values()
-        for file_info in release_files
-    ]
+    releases = data.get("releases", {})
+    release_files = [file_info for files in releases.values() for file_info in files]
+
+    # A project can carry one or more registered release *versions* with
+    # zero files ever uploaded for any of them -- confirmed live against a
+    # real, currently-registered PyPI project: `pypi.org/pypi/
+    # requests_extension/json` returns HTTP 200 with `"releases":
+    # {"0.0.0": []}` (a release record exists, its file list is empty).
+    # Real pip 25.1.1 fails an unqualified `pip install requests_extension`
+    # outright: "ERROR: Could not find a version that satisfies the
+    # requirement requests_extension (from versions: none)" / "ERROR: No
+    # matching distribution found for requests_extension" -- the identical
+    # failure shape as a name that was never registered at all. This is
+    # deliberately narrower than "no releases at all" (`releases == {}`,
+    # left as the pre-existing conservative "ok" default below): Warehouse
+    # never creates a Project record without at least one completed
+    # release, so a genuine 200 response with zero release *versions*
+    # doesn't appear to be reachable in practice, while a version existing
+    # with an empty file list clearly is.
+    if releases and not release_files:
+        return LookupResult("not_found", "project has no installable release files on PyPI")
+
     upload_times = [
         file_info["upload_time_iso_8601"]
         for file_info in release_files

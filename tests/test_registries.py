@@ -147,6 +147,46 @@ def test_check_pypi_ok_when_data_has_no_releases_key():
     assert result.status == "ok"
 
 
+def test_check_pypi_release_with_no_files_is_not_found():
+    # Real-world find: `pypi.org/pypi/requests_extension/json` (a real,
+    # currently-registered PyPI project -- confirmed live 2026-09-28)
+    # returns HTTP 200 with `"releases": {"0.0.0": []}` -- a release
+    # version is registered but carries zero uploaded files. Real pip
+    # 25.1.1 fails an unqualified `pip install requests_extension` outright
+    # ("Could not find a version that satisfies the requirement
+    # requests_extension (from versions: none)" / "No matching distribution
+    # found for requests_extension") -- the identical failure shape as a
+    # name that was never registered at all. Before this fix, `release_files`
+    # flattened to an empty list, so `upload_times` was also empty and the
+    # pre-existing `if not upload_times: return LookupResult("ok")`
+    # fallback fired first, reporting a genuinely uninstallable project as
+    # "ok". This is deliberately distinct from
+    # `test_check_pypi_ok_when_data_has_no_releases_key` above (`releases`
+    # missing/empty entirely, a shape that doesn't appear reachable for a
+    # real 200 response) -- here `releases` has a real version key, just an
+    # empty file list under it.
+    data = {"releases": {"0.0.0": []}}
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_pypi("requests_extension")
+    assert result.status == "not_found"
+    assert result.detail == "project has no installable release files on PyPI"
+
+
+def test_check_pypi_release_with_no_files_among_others_still_checked():
+    # A mix of an empty-file release version and a real installable one
+    # must not trip the new not_found branch -- only *zero files across
+    # every version* should.
+    data = {
+        "releases": {
+            "0.0.0": [],
+            "1.0.0": [{"upload_time_iso_8601": _iso(400)}],
+        }
+    }
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_pypi("some-package")
+    assert result.status == "ok"
+
+
 def test_check_pypi_recent_detail_includes_age():
     data = {"releases": {"0.0.1": [{"upload_time_iso_8601": _iso(2)}]}}
     with patch.object(registries, "_get_json", return_value=data):
