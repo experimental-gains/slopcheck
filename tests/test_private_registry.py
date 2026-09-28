@@ -137,6 +137,48 @@ def test_pip_private_index_from_virtualenv_pip_conf(tmp_path: Path, monkeypatch)
     assert pip_private_index_configured([reqs]) is True
 
 
+def test_pip_private_index_from_sys_prefix_pip_conf_without_virtual_env(tmp_path: Path, monkeypatch):
+    """pip's "site" config file is `os.path.join(sys.prefix, "pip.conf")`
+    (pip._internal.configuration.get_configuration_files), read
+    unconditionally by real pip regardless of the `VIRTUAL_ENV` environment
+    variable — that var is only set when a venv was *activated* via its
+    `activate` script. Invoking a venv's pip directly by path
+    (`./venv/bin/pip install ...`, the standard Dockerfile/CI/Makefile
+    pattern that never sources activate) leaves `VIRTUAL_ENV` unset while
+    `sys.prefix` inside that process is still the venv root.
+
+    Confirmed live: a real venv's own pip.conf (at the venv root) was
+    genuinely honored by that venv's own pip with `VIRTUAL_ENV` explicitly
+    unset (`env -u VIRTUAL_ENV /path/to/venv/bin/pip install --dry-run -v
+    ...` showed "Looking in indexes: ..., http://127.0.0.1:9/simple"), and a
+    slopcheck console-script installed into that same venv and invoked the
+    same way reported a hallucinated dependency as `not_found` instead of
+    `private` before this fix — `_pip_config_paths` only checked
+    `$VIRTUAL_ENV/pip.conf`, never `sys.prefix`.
+    """
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    venv_dir = tmp_path / "venv"
+    venv_dir.mkdir()
+    pip_conf = venv_dir / "pip.conf"
+    pip_conf.write_text("[install]\nextra-index-url = https://pypi.internal.example/simple\n")
+    # Simulate slopcheck's own interpreter running from inside that venv
+    # (sys.prefix is the venv root, sys.base_prefix is the system Python it
+    # was created from) without anyone having sourced `activate`.
+    monkeypatch.setattr(private_registry.sys, "prefix", str(venv_dir))
+    monkeypatch.setattr(private_registry.sys, "base_prefix", str(tmp_path / "system-python"))
+
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("requests>=2.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
 def test_npm_no_private_registry_by_default(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("npm_config_registry", raising=False)
     monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
@@ -211,6 +253,10 @@ def test_npm_scope_uses_first_slash_not_last():
 def test_pip_config_paths_returns_known_locations_in_order(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    # Isolate from whatever venv is actually running this test suite —
+    # sys.prefix != sys.base_prefix would otherwise add a real,
+    # environment-dependent extra entry to the list this test asserts exactly.
+    monkeypatch.setattr(private_registry.sys, "prefix", private_registry.sys.base_prefix)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("XDG_CONFIG_DIRS", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -231,6 +277,10 @@ def test_pip_config_paths_uses_xdg_config_home_when_set(tmp_path: Path, monkeypa
     platformdirs.unix.Unix.user_config_dir implementation exactly."""
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    # Isolate from whatever venv is actually running this test suite —
+    # sys.prefix != sys.base_prefix would otherwise add a real,
+    # environment-dependent extra entry to the list this test asserts exactly.
+    monkeypatch.setattr(private_registry.sys, "prefix", private_registry.sys.base_prefix)
     monkeypatch.delenv("XDG_CONFIG_DIRS", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     xdg = tmp_path / "customxdg"
@@ -250,6 +300,10 @@ def test_pip_config_paths_ignores_blank_xdg_config_home(tmp_path: Path, monkeypa
     back to `~/.config`, the same as when it's unset entirely."""
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    # Isolate from whatever venv is actually running this test suite —
+    # sys.prefix != sys.base_prefix would otherwise add a real,
+    # environment-dependent extra entry to the list this test asserts exactly.
+    monkeypatch.setattr(private_registry.sys, "prefix", private_registry.sys.base_prefix)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", "")
 
@@ -271,6 +325,10 @@ def test_pip_config_paths_uses_xdg_config_dirs_when_set(tmp_path: Path, monkeypa
     platformdirs.unix.Unix._site_config_dirs implementation exactly."""
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    # Isolate from whatever venv is actually running this test suite —
+    # sys.prefix != sys.base_prefix would otherwise add a real,
+    # environment-dependent extra entry to the list this test asserts exactly.
+    monkeypatch.setattr(private_registry.sys, "prefix", private_registry.sys.base_prefix)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     xdg_dirs = tmp_path / "customxdgdirs"
@@ -290,6 +348,10 @@ def test_pip_config_paths_supports_multiple_colon_separated_xdg_config_dirs(tmp_
     path — every one of them gets its own `pip.conf` check."""
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    # Isolate from whatever venv is actually running this test suite —
+    # sys.prefix != sys.base_prefix would otherwise add a real,
+    # environment-dependent extra entry to the list this test asserts exactly.
+    monkeypatch.setattr(private_registry.sys, "prefix", private_registry.sys.base_prefix)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     first = tmp_path / "first"
@@ -311,6 +373,10 @@ def test_pip_config_paths_ignores_blank_xdg_config_dirs(tmp_path: Path, monkeypa
     the default `/etc/xdg`, the same as when it's unset entirely."""
     monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    # Isolate from whatever venv is actually running this test suite —
+    # sys.prefix != sys.base_prefix would otherwise add a real,
+    # environment-dependent extra entry to the list this test asserts exactly.
+    monkeypatch.setattr(private_registry.sys, "prefix", private_registry.sys.base_prefix)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_DIRS", "")

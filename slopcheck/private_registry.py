@@ -20,6 +20,7 @@ from __future__ import annotations
 import configparser
 import os
 import re
+import sys
 from pathlib import Path
 
 try:
@@ -117,6 +118,48 @@ def _pip_site_config_dirs() -> list[Path]:
 
 
 def _pip_config_paths() -> list[Path]:
+    """pip's own "site" config variant is keyed off `sys.prefix`, not `$VIRTUAL_ENV`.
+
+    Reading pip's own source (pip._internal.configuration.get_configuration_files:
+    `site_config_file = os.path.join(sys.prefix, CONFIG_BASENAME)`, and
+    `ConfigOptionParser`'s override order includes this "site" variant
+    unconditionally, with no dependency on the `VIRTUAL_ENV` environment
+    variable anywhere in that path) shows this file only checked
+    `$VIRTUAL_ENV/pip.conf`, which is a real but incomplete proxy for it: the
+    `VIRTUAL_ENV` env var is only set when a venv was *activated* (`source
+    venv/bin/activate`) — a real, extremely common alternative is invoking a
+    venv's own pip directly by path (`./venv/bin/pip install ...`, the
+    standard pattern in Dockerfiles/CI/Makefiles that never sources
+    activate), which leaves `VIRTUAL_ENV` unset entirely while `sys.prefix`
+    inside that pip process is still the venv root.
+
+    Confirmed live: created `/tmp/sc_venv`, installed slopcheck into it,
+    dropped `[install] extra-index-url = http://127.0.0.1:9/simple` into
+    `/tmp/sc_venv/pip.conf`, and ran both real pip and slopcheck *from that
+    same venv* with `VIRTUAL_ENV` explicitly unset (`env -u VIRTUAL_ENV`).
+    Real pip's own verbose output showed "Looking in indexes:
+    https://pypi.org/simple, http://127.0.0.1:9/simple" — it genuinely read
+    the venv-root pip.conf with no VIRTUAL_ENV involved at all, exactly as
+    its own source predicts (sys.prefix inside that venv's Python is the venv
+    directory regardless of whether it was "activated"). slopcheck, run the
+    same way from a `slopcheck` console-script installed into that very
+    venv, reported a hallucinated requirements.txt entry as a plain
+    `not_found` instead of downgrading it to `private` — a real
+    misclassification for the common case where slopcheck itself is
+    installed into the same project venv it's scanning (e.g. `pip install -e
+    .[dev]` covering both pytest and this tool) and invoked without
+    activation, the same way its sibling pip would be.
+
+    Checking `sys.prefix != sys.base_prefix` (the standard way to detect
+    "the running interpreter is itself inside a venv", used by pip's own
+    `sys.prefix`-based site file and by `venv`'s own activation-detection
+    idiom) subsumes the already-correct `VIRTUAL_ENV`-activated case for
+    free, since activating a venv makes any process launched from that shell
+    (including slopcheck) inherit a matching `sys.prefix` — so both are kept
+    rather than one replacing the other, covering the (separate, real) case
+    where `VIRTUAL_ENV` names a *different* venv than the one slopcheck's own
+    interpreter happens to be running under.
+    """
     paths = []
     env_path = os.environ.get("PIP_CONFIG_FILE")
     if env_path:
@@ -124,6 +167,8 @@ def _pip_config_paths() -> list[Path]:
     virtual_env = os.environ.get("VIRTUAL_ENV")
     if virtual_env:
         paths.append(Path(virtual_env) / "pip.conf")
+    if sys.prefix != sys.base_prefix:
+        paths.append(Path(sys.prefix) / "pip.conf")
     paths.append(_pip_user_config_dir() / "pip.conf")
     paths.append(Path.home() / ".pip" / "pip.conf")
     paths.extend(site_dir / "pip.conf" for site_dir in _pip_site_config_dirs())
