@@ -194,6 +194,37 @@ def test_parse_package_json_skips_bare_github_shorthand_and_other_git_hosts(tmp_
     assert names == {"react"}
 
 
+def test_parse_package_json_skips_gist_shorthand(tmp_path: Path):
+    # npm's own docs list "gist:" as a fourth documented git-host shorthand
+    # alongside "github:"/"gitlab:"/"bitbucket:" ("you may also specify the
+    # gist:, bitbucket:, gitlab:, and github: prefixes explicitly"), and
+    # npm-package-arg's HostedGit.fromUrl() dispatches it to git exactly like
+    # the other three. Unlike them, a real gist reference is just a bare gist
+    # ID with no "/" at all, so the "/"-based fallback that catches the other
+    # hosts' bare/prefixed shorthand never fires for it. Confirmed live (npm
+    # 11.20.0, `npm install`): a hallucinated dependency name paired with a
+    # "gist:"-prefixed version value made npm run `git --no-replace-objects
+    # ls-remote ssh://git@gist.github.com/<id>.git` and never contact the
+    # npm registry for that name at all, regardless of whether the gist
+    # exists -- the same false-positive shape already fixed for the other
+    # three git-host shorthands, just missed here because "gist:" alone was
+    # never in `_NON_REGISTRY_PREFIXES` and has no slash to trip the fallback.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "gist-dep": "gist:101a11beef",
+                    "gist-dep-with-slash": "gist:someuser/101a11beef",
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"react"}
+
+
 def test_parse_package_json_still_checks_yarn_patch_protocol_deps(tmp_path: Path):
     # Confirmed live (Yarn Berry 4.5.0, `yarn install` against a scratch
     # "patch:totally-hallucinated-name-xyz-987@npm%3A1.0.0#~/patches/fake.patch"

@@ -777,7 +777,24 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
 # monorepo tooling (pnpm/Yarn/npm workspaces, Turborepo, Nx, Lerna) commonly
 # names internal-only packages this way, so checking them against the
 # registry produces a false "not found" on every workspace monorepo.
-_NON_REGISTRY_PREFIXES = ("workspace:", "file:", "link:", "portal:", "git:", "git+", "github:")
+#
+# "gist:" is npm's fourth documented git-host shorthand (npm's own docs list
+# it right alongside "github:"/"gitlab:"/"bitbucket:": "you may also specify
+# the gist:, bitbucket:, gitlab:, and github: prefixes explicitly"), and
+# npm-package-arg's `HostedGit.fromUrl()` (read directly from
+# `/usr/share/nodejs/npm-package-arg/lib/npa.js` on this box) dispatches it
+# to git exactly like the other three. Unlike them, though, a real gist
+# reference is just a bare gist ID with no "/" at all (e.g. "gist:
+# 101a11beef") — `_npm_looks_like_hosted_git_or_path`'s blanket "/" fallback
+# below, which is what catches the *other* three hosts' bare/prefixed
+# shorthand, never fires for it, so it needs its own explicit prefix here
+# instead. Confirmed live (npm 11.20.0, `npm install`): a hallucinated
+# dependency name paired with a "gist:"-prefixed version value made npm run
+# `git --no-replace-objects ls-remote ssh://git@gist.github.com/<id>.git`
+# and never contact the npm registry for that name at all, regardless of
+# whether the gist exists — the exact same false-positive shape already
+# fixed for "github:"/"gitlab:"/"bitbucket:"/bare shorthand.
+_NON_REGISTRY_PREFIXES = ("workspace:", "file:", "link:", "portal:", "git:", "git+", "github:", "gist:")
 
 _NPM_ALIAS_PREFIX = "npm:"
 
