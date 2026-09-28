@@ -62,6 +62,61 @@ def _strip_inline_comment(line: str) -> str:
     return line[: match.start()].rstrip() if match else line
 
 
+# pip's own requirements-file preprocessor (`req_file.py`'s `join_lines`,
+# read directly from pip 25.1.1's source) joins a physical line ending in a
+# trailing `\` with the line(s) that follow it into one logical line *before*
+# any requirement is parsed out of it — and, separately, `pip-compile
+# --generate-hashes` (part of the widely-used pip-tools) routinely emits
+# exactly this shape for a spec too long to fit on one line, e.g. wrapping a
+# long extras list so the version specifier lands on its own continuation
+# line. Confirmed live (real pip 25.1.1, `pip install --dry-run -r` against
+# a two-line file: `"totally-hallucinated-xyz-987 \\"` then `"    ==1.2.3"`):
+# pip genuinely joins them into one requirement and fails resolving it
+# exactly like any other hallucinated name ("ERROR: Could not find a version
+# that satisfies the requirement totally-hallucinated-xyz-987==1.2.3 (from
+# versions: none)").
+#
+# Before this fix, `_parse_requirements_txt` walked `text.splitlines()` with
+# no continuation-joining at all: `_REQ_LINE_RE` has no alternative that
+# matches a lone trailing "\", so a continued first line failed to match and
+# was silently dropped, and a continuation line starting with the version
+# specifier alone (no leading name character) never matches either — the
+# name never became a `Dependency` at all, even though a real `pip install
+# -r` genuinely tries to fetch it. (A continuation that only carries
+# `--hash=...` flags after an already-complete `name==version` on the first
+# line happened to keep working before this fix too, since `_REQ_LINE_RE`'s
+# trailing `.*` greedily swallows the stray backslash on that first line —
+# this fix doesn't change that case, just the one it was accidental for.)
+#
+# Mirrors pip's own `COMMENT_RE.match(line)` guard (a whole-line comment,
+# even one ending in "\", is never continued) and pip's "no separator, plain
+# concatenation" join (a continuation line's own leading whitespace is kept
+# verbatim, exactly as pip's `"".join(new_line)` does it) — precise enough to
+# match pip's real behavior for this format's ordinary use, without needing
+# every other unrelated preprocessing step (env var expansion, full comment
+# stripping) `join_lines` sits alongside in pip's own pipeline, which this
+# module already applies its own way further down.
+_WHOLE_LINE_COMMENT_RE = re.compile(r"^\s*#")
+
+
+def _join_backslash_continuations(text: str) -> list[str]:
+    lines: list[str] = []
+    buffer: list[str] = []
+    for raw_line in text.splitlines():
+        if raw_line.endswith("\\") and not _WHOLE_LINE_COMMENT_RE.match(raw_line):
+            buffer.append(raw_line[:-1])
+            continue
+        if buffer:
+            buffer.append(raw_line)
+            lines.append("".join(buffer))
+            buffer = []
+        else:
+            lines.append(raw_line)
+    if buffer:
+        lines.append("".join(buffer))
+    return lines
+
+
 # All three manifest readers below use "utf-8-sig" rather than plain "utf-8":
 # it transparently strips a leading UTF-8 byte-order mark when one is present
 # and behaves identically to plain "utf-8" when it isn't, so it's a safe
@@ -138,7 +193,7 @@ def _parse_requirements_txt(path: Path, seen: set[Path]) -> tuple[list[Dependenc
         raise ManifestParseError(f"{path}: referenced requirements file not found ({e})") from e
 
     deps = []
-    for raw_line in text.splitlines():
+    for raw_line in _join_backslash_continuations(text):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue

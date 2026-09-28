@@ -81,6 +81,44 @@ def test_parse_requirements_txt_comment_with_url_still_checks_dep(tmp_path: Path
     assert names == {"requests", "flask"}
 
 
+def test_parse_requirements_txt_joins_backslash_continuation(tmp_path: Path):
+    # pip's own requirements-file preprocessor (req_file.py's `join_lines`)
+    # joins a line ending in an unescaped `\` with the line(s) that follow it
+    # *before* it ever tries to parse a requirement out of it — real, current
+    # syntax `pip-compile --generate-hashes` emits routinely for a spec too
+    # long to fit on one line, e.g. an extras list wrapping the version onto
+    # its own continuation line. Confirmed live (real pip 25.1.1, `pip
+    # install --dry-run -r`, this exact two-line shape): pip genuinely joins
+    # them into one logical requirement, "totally-hallucinated-xyz-987
+    # ==1.2.3", and fails resolving it exactly like any other hallucinated
+    # name — "ERROR: Could not find a version that satisfies the requirement
+    # totally-hallucinated-xyz-987==1.2.3 (from versions: none)".
+    #
+    # Before this fix, `_parse_requirements_txt` walked `text.splitlines()`
+    # with no continuation-joining at all: the first physical line
+    # ("totally-hallucinated-xyz-987 \") has a trailing backslash `_REQ_LINE_RE`
+    # can't absorb (no alternation branch matches a lone "\"), so the whole
+    # line fails to match and is silently dropped; the second physical line
+    # ("    ==1.2.3") doesn't start with a name character either, so it's
+    # dropped too. The name never became a `Dependency` at all — a real
+    # `pip install -r` would genuinely try to fetch it, but slopcheck reported
+    # a clean scan.
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "\n".join(
+            [
+                "totally-hallucinated-xyz-987 \\",
+                "    ==1.2.3",
+                "real-onefile-dep==1.0.0 \\",
+                "    --hash=sha256:aaaa \\",
+                "    --hash=sha256:bbbb",
+            ]
+        )
+    )
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"totally-hallucinated-xyz-987", "real-onefile-dep"}
+
+
 def test_parse_package_json(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
