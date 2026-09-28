@@ -147,6 +147,46 @@ def test_check_npm_recent_detail_includes_age():
     assert result.detail == "first published 5 days ago"
 
 
+def test_check_npm_unpublished_package_is_not_found():
+    # Real registry shape for an unpublished npm package (captured live from
+    # https://registry.npmjs.org/@jinyezhao/hyness-plugins, which npm's own
+    # replication feed flagged `deleted` yet the registry still answers 200
+    # with the pre-unpublish "time.created" and no "versions" key): the doc
+    # keeps `created` from the original (recent) publish, but real npm
+    # tooling (`npm view`) hard-fails with "404 Unpublished on <date>" for
+    # this exact name -- it is not installable, so slopcheck must not call
+    # it "recent" (implying merely new-but-real) or "ok".
+    data = {
+        "time": {
+            "created": _iso(0.01),
+            "modified": _iso(0.005),
+            "1.0.0": _iso(0.01),
+            "unpublished": {"time": _iso(0.005), "versions": ["1.0.0"]},
+        },
+        "maintainers": [{"email": "example@example.com", "name": "someone"}],
+    }
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_npm("@jinyezhao/hyness-plugins")
+    assert result.status == "not_found"
+
+
+def test_check_npm_unpublished_long_ago_is_not_found_not_ok():
+    # Same unpublished state, but the original publish was long enough ago
+    # that the old (pre-fix) code path would have hit the "ok" branch --
+    # the most misleading divergence, since it silently vouches for a
+    # dependency that `npm install` cannot actually fetch.
+    data = {
+        "time": {
+            "created": _iso(1000),
+            "modified": _iso(500),
+            "unpublished": {"time": _iso(500), "versions": ["1.0.0"]},
+        },
+    }
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_npm("some-old-unpublished-package")
+    assert result.status == "not_found"
+
+
 def test_check_npm_boundary_at_recent_days_is_not_recent(monkeypatch):
     monkeypatch.setattr(registries, "_days_since", lambda ts: 30.0)
     data = {"time": {"created": "irrelevant"}}

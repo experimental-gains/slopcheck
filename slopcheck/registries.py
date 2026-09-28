@@ -82,6 +82,20 @@ def check_npm(name: str) -> LookupResult:
     if data is None:
         return LookupResult("not_found", "no such package on npm")
 
+    # An unpublished package still has a registry document (HTTP 200, with
+    # the original "time.created" intact) but real npm tooling treats it as
+    # nonexistent: `npm install`/`npm view` return a hard 404 ("Unpublished
+    # on <date>"), not the contents of the old publish. Without this check,
+    # `created` below is read from that stale pre-unpublish timestamp, so a
+    # package unpublished shortly after a fresh release reports "recent" and
+    # one unpublished long after its original release reports "ok" — both
+    # implying an installable package when npm can no longer install it at
+    # all. Verified against the live registry (a same-day publish+unpublish
+    # observed via the replication feed) and confirmed with the real `npm
+    # view` client, which surfaces exactly this "404 Unpublished" error.
+    if data.get("time", {}).get("unpublished"):
+        return LookupResult("not_found", "package was unpublished from npm")
+
     created = data.get("time", {}).get("created")
     if not created:
         return LookupResult("ok")
