@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.43
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.44
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.43
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.44
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.43
+    rev: v0.1.44
     hooks:
       - id: slopcheck
 ```
@@ -756,6 +756,26 @@ fix, the leftover BOM character glued onto each file's first line broke
 the regex that looks for the directive there, so this tool silently
 reported no private index configured and flagged a genuinely
 private-only dependency as a plain hallucination instead.
+
+pip's own venv-root `pip.conf` (its "site" config variant) is now
+recognized even when `$VIRTUAL_ENV` is unset (fixed in v0.1.44). Real
+pip's own source (`pip._internal.configuration.get_configuration_files`)
+derives this location from `sys.prefix`, not the `VIRTUAL_ENV`
+environment variable — `VIRTUAL_ENV` is only set when a venv was
+activated via its `activate` script, but invoking a venv's own pip
+directly by path (`./venv/bin/pip install ...`, the standard
+Dockerfile/CI/Makefile pattern that never sources `activate`) leaves
+`VIRTUAL_ENV` unset while `sys.prefix` inside that process is still the
+venv root. Confirmed live: a venv-root `pip.conf`'s `extra-index-url`
+was genuinely honored by that venv's own `pip` with `VIRTUAL_ENV`
+explicitly unset. Before this fix, this tool only checked
+`$VIRTUAL_ENV/pip.conf`, so a private index configured this way was
+invisible to it whenever slopcheck itself was installed into and
+invoked from the same project venv without activation (e.g. `pip
+install -e .[dev]` covering both the project's tests and this tool) —
+a real, common setup, not an edge case — flagging a genuinely
+private-only dependency as a plain hallucination instead of downgrading
+it to private.
 
 ## requirements.txt inline comments
 
