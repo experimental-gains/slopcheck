@@ -919,6 +919,29 @@ def test_find_manifests_prunes_node_modules_and_dot_directories(tmp_path: Path):
     assert found == {"package.json"}
 
 
+def test_find_manifests_prunes_non_dotted_virtualenv_directory_names(tmp_path: Path):
+    # A virtualenv isn't always dot-prefixed: Python's own venv module docs
+    # say environments are "conventionally named `.venv` or `venv`", and
+    # GitHub's official `Python.gitignore` template (what `gh repo create
+    # --gitignore Python`/the GitHub web UI write into new repos) lists
+    # `env/`, `venv/`, `ENV/`, `env.bak/`, and `venv.bak/` as equally-real
+    # virtualenv directory names alongside `.venv`. Confirmed live: a fresh
+    # `venv` (no dot) with pandas installed carries pandas' own
+    # `pyproject.toml` (90 raw dependency specs unrelated to the project
+    # being scanned) under `venv/lib/.../site-packages/pandas/`, the exact
+    # same false-signal shape the dot-prefixed `.venv` case above is already
+    # pruned for.
+    (tmp_path / "requirements.txt").write_text("requests\n")
+    for dirname in ("venv", "env", "ENV", "venv.bak", "env.bak"):
+        installed = tmp_path / dirname / "lib" / "site-packages" / "pandas"
+        installed.mkdir(parents=True)
+        (installed / "pyproject.toml").write_text('[project]\nname = "pandas"\ndependencies = ["numpy"]\n')
+
+    found = {str(p.relative_to(tmp_path)) for p in find_manifests(tmp_path)}
+
+    assert found == {"requirements.txt"}
+
+
 def test_parse_requirements_txt_strips_leading_utf8_bom(tmp_path: Path):
     # Real-world find: a `requirements.txt` saved by a Windows editor/tool can
     # carry a leading UTF-8 BOM. Without stripping it, the BOM character

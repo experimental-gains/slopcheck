@@ -1011,7 +1011,27 @@ PARSERS = {
 # pip/uv virtualenv, `.tox`, editor/CI config dirs) are skipped as a group for
 # the same reason: none of them hold manifests a human wrote, and `.venv`
 # specifically can contain an installed package's own `pyproject.toml`.
-_SKIP_DIR_NAMES = {"node_modules"}
+#
+# A virtualenv isn't always dot-prefixed, though: Python's own `venv` module
+# docs (https://docs.python.org/3/library/venv.html) say plainly "virtual
+# environments are conventionally named `.venv` or `venv`", Flask's official
+# installation guide is the only one of the two that happens to use `.venv`,
+# and GitHub's own `github/gitignore` `Python.gitignore` template (the
+# pattern list `gh repo create --gitignore Python`/the GitHub web UI's "Add
+# .gitignore" button writes into new repos) lists `.venv`, `env/`, `venv/`,
+# `ENV/`, `env.bak/`, and `venv.bak/` side by side as equally-real virtualenv
+# directory names. Before this fix, only the dot-prefixed form was pruned, so
+# a real, common non-dot-prefixed virtualenv sitting inside the scanned tree
+# (e.g. the exact `python3 -m venv venv` from Python's own docs) wasn't — and
+# a virtualenv can genuinely contain an installed package's own bundled
+# manifest, the same false-signal shape `.venv` was already fixed for above:
+# confirmed live, a fresh `venv` (no dot) with pandas installed carries
+# `.../site-packages/pandas/pyproject.toml` (90 raw dependency specs, none
+# of them related to the project actually being scanned) and
+# `.../site-packages/numpy/f2py/setup.cfg`, both picked up by an unpruned
+# `find_manifests` walk and both invisible to it once `venv` is pruned the
+# same way `.venv` already is.
+_SKIP_DIR_NAMES = {"node_modules", "venv", "env", "ENV", "venv.bak", "env.bak"}
 
 
 def find_manifests(root: Path) -> list[Path]:
