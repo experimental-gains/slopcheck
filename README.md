@@ -29,7 +29,11 @@ against the real registry (PyPI or npm), and flags:
   actually verified either way. Doesn't fail CI under the default
   `--fail-on not_found` gate or `--fail-on recent` — pass `--fail-on
   error` if an unverifiable dependency should block the build rather
-  than pass silently.
+  than pass silently (the `error` choice itself is fixed in v0.1.46;
+  before that, no `--fail-on` setting could ever fail the build on an
+  errored lookup, an unintentional silent fail-open — an internal
+  severity ranking placed "error" as though a stricter choice existed
+  to reach it, but `--fail-on`'s own `choices=[...]` never listed one).
 
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
@@ -78,7 +82,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.45
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.46
 ```
 
 ## Usage
@@ -104,7 +108,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.45
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.46
     slopcheck
 ```
 
@@ -113,7 +117,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.45
+    rev: v0.1.46
     hooks:
       - id: slopcheck
 ```
@@ -785,7 +789,7 @@ it to private.
 
 A `package.json`'s plain `"workspaces"` field (npm 7+ native
 workspaces, or Yarn Classic's array/object forms) is now recognized
-(fixed in v0.1.45): a sibling workspace member named with an ordinary
+(fixed in v0.1.46): a sibling workspace member named with an ordinary
 semver range — not just pnpm's/Yarn Berry's explicit `workspace:`
 protocol prefix, which this tool already skipped — resolves entirely
 locally via a symlink and never reaches the registry. Confirmed live
