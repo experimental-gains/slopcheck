@@ -1274,6 +1274,56 @@ def test_parse_setup_cfg_single_line_semicolon_list(tmp_path: Path):
     }
 
 
+def test_parse_setup_cfg_install_requires_file_directive(tmp_path: Path):
+    # Real-world find: setuptools' actual `install_requires`/
+    # `[options.extras_require]` parser (`_parse_requirements_list`, confirmed
+    # live by reading setuptools 84.0.0's `setupcfg.py`) treats a value
+    # starting with the literal "file:" as a comma-separated list of paths
+    # *relative to the directory containing setup.cfg*, reads them, and joins
+    # their contents before splitting into individual requirements — it's not
+    # a literal string to check against PyPI. Confirmed against a real,
+    # currently-maintained PyPI package: `CleanCut/green`'s shipped setup.cfg
+    # has `install_requires = file:requirements.txt` and
+    # `[options.extras_require] dev = file:requirements-dev.txt`, both
+    # resolving (confirmed live with setuptools 84.0.0's own
+    # `read_configuration`) to real requirement lists. Before this fix,
+    # `_setup_cfg_list_deps` received the literal string
+    # `"file:requirements.txt"` unchanged; `_REQ_LINE_RE` doesn't match it
+    # (":" isn't a valid name/version-specifier character), so every
+    # dependency in the referenced file silently vanished — the same "0
+    # dependencies checked, all clean" false-all-clear shape as the
+    # Pipfile/`[build-system] requires` gaps already fixed here. Also covers
+    # a comma-separated multi-file value (setuptools' own documented form,
+    # `file: a.txt, b.txt`) and confirms `[options] setup_requires` is
+    # deliberately unaffected: its parser entry
+    # (`self._parse_list_semicolon`) never expands `file:` at all, so a
+    # literal `file:...` value there stays inert rather than resolving.
+    (tmp_path / "requirements.txt").write_text("requests\ntotally-hallucinated-package-xyz-987\n")
+    (tmp_path / "requirements-dev.txt").write_text("pytest\n")
+    (tmp_path / "extra-dev.txt").write_text("another-hallucinated-pkg-xyz654\n")
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text(
+        "[options]\n"
+        "install_requires = file:requirements.txt\n"
+        "setup_requires = file:requirements.txt\n"
+        "\n"
+        "[options.extras_require]\n"
+        "dev = file: requirements-dev.txt, extra-dev.txt\n"
+    )
+    deps = parse_setup_cfg(cfg)
+    names = {dep.name for dep in deps}
+    assert names == {
+        "requests",
+        "totally-hallucinated-package-xyz-987",
+        "pytest",
+        "another-hallucinated-pkg-xyz654",
+    }
+    sources = {dep.name: dep.source for dep in deps}
+    assert sources["requests"] == str(tmp_path / "requirements.txt")
+    assert sources["pytest"] == str(tmp_path / "requirements-dev.txt")
+    assert sources["another-hallucinated-pkg-xyz654"] == str(tmp_path / "extra-dev.txt")
+
+
 def test_find_manifests_discovers_setup_cfg(tmp_path: Path):
     (tmp_path / "setup.cfg").write_text("[options]\ninstall_requires =\n    requests\n")
     found = {p.name for p in find_manifests(tmp_path)}

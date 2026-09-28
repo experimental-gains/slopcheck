@@ -503,6 +503,63 @@ def _setup_cfg_list_deps(value: str, path: Path) -> list[Dependency]:
     return deps
 
 
+def _setup_cfg_requirements_value(value: str, path: Path) -> list[Dependency]:
+    """Resolve an `install_requires`/`[options.extras_require]` value, following
+    setuptools' own `file:` directive when present.
+
+    setuptools' real parser for these two fields specifically (confirmed live
+    by reading setuptools 84.0.0's `setupcfg.py`: `'install_requires':
+    partial(self._parse_requirements_list, ...)` and the same
+    `_parse_requirements_list` used for every `[options.extras_require]`
+    value) doesn't hand the raw config value straight to the semicolon-
+    or-newline splitter this module already has in `_setup_cfg_list_deps`.
+    It first calls `_parse_file_in_root`, which checks whether the value
+    starts with the literal `file:` — and if so, treats everything after it
+    as a comma-separated list of paths *relative to the directory containing
+    setup.cfg*, reads each one, and joins their contents with "\\n" — *then*
+    runs that concatenated text through the same splitter. So
+    `install_requires = file:requirements.txt` is real, current syntax that
+    resolves to the actual contents of `requirements.txt`, not a literal
+    string to check against PyPI.
+
+    Confirmed real and current, not a hypothetical: `CleanCut/green` (a real,
+    actively maintained PyPI package — `pip install green`) declares its
+    dependencies exactly this way in its shipped `setup.cfg`:
+    `install_requires = file:requirements.txt` and
+    `[options.extras_require] dev = file:requirements-dev.txt`, both
+    resolving (confirmed against setuptools 84.0.0's own
+    `read_configuration`) to real requirement lists (colorama, coverage,
+    lxml, setuptools, unidecode; black, coverage[toml], django, mypy,
+    testtools). Before this fix, `_setup_cfg_list_deps` received the literal
+    string `"file:requirements.txt"` unchanged — `_REQ_LINE_RE` doesn't match
+    it (`:` isn't a valid name or version-specifier character), so it was
+    silently dropped and the entire referenced file's dependencies were never
+    checked: the same silent "0 dependencies checked, all clean"
+    false-all-clear shape as the Pipfile/`[build-system] requires`/PEP 621
+    `dynamic` gaps already fixed here. Reuses `parse_requirements_txt` (not
+    the simpler `_setup_cfg_list_deps`) for the referenced file the same way
+    `_setuptools_dynamic_deps` already does for pyproject.toml's own
+    `file`-sourced dynamic dependencies, so `Dependency.source` correctly
+    points at the file the name was actually found in.
+
+    `[options] setup_requires` deliberately does NOT get this treatment: its
+    parser entry is the plain `self._parse_list_semicolon`, not
+    `_parse_requirements_list` — setuptools itself never expands a `file:`
+    directive there.
+    """
+    stripped = value.strip()
+    if not stripped.startswith("file:"):
+        return _setup_cfg_list_deps(value, path)
+
+    base_dir = path.parent
+    deps: list[Dependency] = []
+    for raw_filename in stripped[len("file:") :].split(","):
+        filename = raw_filename.strip()
+        if filename:
+            deps.extend(parse_requirements_txt(base_dir / filename))
+    return deps
+
+
 def parse_setup_cfg(path: Path) -> list[Dependency]:
     """Parse setuptools' legacy `setup.cfg` `[options]`/`[options.extras_require]`.
 
@@ -564,12 +621,12 @@ def parse_setup_cfg(path: Path) -> list[Dependency]:
 
     deps = []
     if parser.has_option("options", "install_requires"):
-        deps.extend(_setup_cfg_list_deps(parser.get("options", "install_requires"), path))
+        deps.extend(_setup_cfg_requirements_value(parser.get("options", "install_requires"), path))
     if parser.has_option("options", "setup_requires"):
         deps.extend(_setup_cfg_list_deps(parser.get("options", "setup_requires"), path))
     if parser.has_section("options.extras_require"):
         for value in parser["options.extras_require"].values():
-            deps.extend(_setup_cfg_list_deps(value, path))
+            deps.extend(_setup_cfg_requirements_value(value, path))
     return deps
 
 
