@@ -82,7 +82,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.47
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.48
 ```
 
 ## Usage
@@ -108,7 +108,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.47
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.48
     slopcheck
 ```
 
@@ -117,7 +117,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.47
+    rev: v0.1.48
     hooks:
       - id: slopcheck
 ```
@@ -434,6 +434,21 @@ Earlier versions only read `install_requires`/`extras_require`, so a
 hallucinated name planted only in `setup_requires` sailed through
 unchecked even though a real build genuinely installs it first — the
 same failure shape as the `[build-system] requires` gap above.
+
+A single-line, semicolon-separated `setup.cfg` list value — e.g.
+`install_requires = requests;totally-hallucinated-package-xyz-123` —
+now has every entry checked, not just the first (fixed in v0.1.48).
+setuptools' own list parser splits a value on `;` whenever the value
+has no newline in it, and on `\n` when it does — confirmed live
+against setuptools 84.0.0 (this project's own pinned minimum):
+`setuptools.config.setupcfg.read_configuration` on that exact value
+returns two real requirements. Earlier versions of this parser only
+ever split on newlines, so a single-line semicolon list was treated as
+one whole line and matched as a single requirement — the name before
+the first `;` was extracted, and everything after it (including a
+second, hallucinated package name) was silently swallowed the same way
+a real PEP 508 environment marker (`; python_version < "3.8"`) is,
+never even seen, let alone checked against PyPI.
 
 PDM's own legacy `[tool.pdm.dev-dependencies]` table — predates PEP 735,
 structurally identical to `[dependency-groups]` (group name -> list of
