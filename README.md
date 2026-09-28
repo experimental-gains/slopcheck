@@ -36,7 +36,7 @@ against the real registry (PyPI or npm), and flags:
   to reach it, but `--fail-on`'s own `choices=[...]` never listed one).
 
 An unpublished npm package now reports **not found**, not "recent" or
-"ok" (fixed in v0.1.49). `registry.npmjs.org` keeps answering `GET
+"ok" (fixed in v0.1.50). `registry.npmjs.org` keeps answering `GET
 /<name>` with HTTP 200 for an unpublished package — the document
 retains its original `time.created` and adds a `time.unpublished`
 marker, but drops `versions` — while real npm tooling (`npm view`/
@@ -49,6 +49,24 @@ returned exactly that 404. Before this fix, slopcheck read only
 shortly after a fresh release) or, more dangerously, "ok" (unpublished
 long after its original release) — both implying npm can still
 install it when it no longer can.
+
+`setup.cfg`'s `install_requires`/`[options.extras_require]` now follow
+setuptools' own `file:` directive (fixed in v0.1.50). `install_requires
+= file:requirements.txt` is real, current setuptools syntax — the
+value doesn't name a package, it points at a file (or comma-separated
+list of files, relative to the directory containing `setup.cfg`) whose
+contents get read in and split into the real requirement list.
+Confirmed against a real, currently-maintained PyPI package:
+`CleanCut/green`'s shipped `setup.cfg` declares `install_requires =
+file:requirements.txt` and `[options.extras_require] dev =
+file:requirements-dev.txt`, both resolving (verified live with
+setuptools' own `read_configuration`) to 9 real requirement names.
+Before this fix, slopcheck handed the literal string
+`"file:requirements.txt"` to its requirement-line matcher, which
+doesn't match it (`:` isn't a valid name/version-specifier character),
+so every dependency in the referenced file was silently never checked
+— slopcheck reported "0 dependencies checked, all clean" against a
+`setup.cfg` that setuptools itself resolves to real, live dependencies.
 
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
@@ -97,7 +115,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.49
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.50
 ```
 
 ## Usage
@@ -123,7 +141,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.49
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.50
     slopcheck
 ```
 
@@ -132,7 +150,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.49
+    rev: v0.1.50
     hooks:
       - id: slopcheck
 ```
