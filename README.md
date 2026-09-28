@@ -35,6 +35,21 @@ against the real registry (PyPI or npm), and flags:
   severity ranking placed "error" as though a stricter choice existed
   to reach it, but `--fail-on`'s own `choices=[...]` never listed one).
 
+An unpublished npm package now reports **not found**, not "recent" or
+"ok" (fixed in v0.1.49). `registry.npmjs.org` keeps answering `GET
+/<name>` with HTTP 200 for an unpublished package — the document
+retains its original `time.created` and adds a `time.unpublished`
+marker, but drops `versions` — while real npm tooling (`npm view`/
+`npm install`) hard-fails with a 404 `"Unpublished on <date>"` for
+that exact name. Confirmed live against a real unpublished package
+(`@jinyezhao/hyness-plugins`, still 200 with a stale `time.created`
+and no `versions`) and against the real `npm view` client, which
+returned exactly that 404. Before this fix, slopcheck read only
+`time.created`, so an unpublished package looked "recent" (unpublished
+shortly after a fresh release) or, more dangerously, "ok" (unpublished
+long after its original release) — both implying npm can still
+install it when it no longer can.
+
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
 Those are pip's and npm's own errors for exactly this situation — a
@@ -82,7 +97,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.48
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.49
 ```
 
 ## Usage
@@ -108,7 +123,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.48
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.49
     slopcheck
 ```
 
@@ -117,7 +132,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.48
+    rev: v0.1.49
     hooks:
       - id: slopcheck
 ```
