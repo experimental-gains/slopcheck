@@ -24,6 +24,12 @@ against the real registry (PyPI or npm), and flags:
   slopcheck can't reach an arbitrary private registry to confirm it,
   so it reports this as unverified rather than as a hallucination.
   Doesn't fail CI under the default `--fail-on not_found` gate.
+- **error** — the registry lookup itself couldn't complete (network
+  failure, rate limit, registry outage), so this dependency was never
+  actually verified either way. Doesn't fail CI under the default
+  `--fail-on not_found` gate or `--fail-on recent` — pass `--fail-on
+  error` if an unverifiable dependency should block the build rather
+  than pass silently.
 
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 

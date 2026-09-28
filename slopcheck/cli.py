@@ -27,6 +27,18 @@ from .private_registry import (
 )
 from .registries import CHECKERS, LookupResult
 
+# Also the ordering `--fail-on`'s threshold comparison walks: choosing a
+# more lenient-sounding `--fail-on` value (e.g. "recent" over "not_found")
+# raises the threshold and pulls in every status ranked at or below it, so
+# "error" (a lookup that couldn't be completed at all -- network failure,
+# rate limit, registry outage) must sit strictly above "recent" here to be
+# reachable via `--fail-on error` without also being silently included by
+# the less strict `--fail-on recent`. "private" stays out of reach of any
+# real `--fail-on` choice on purpose (see `_UNVERIFIED_DETAIL`'s use in
+# `_downgrade_if_private` below) -- unlike "error", it's a deliberate,
+# documented downgrade for a name genuinely expected on a configured
+# private index, not an unverifiable result a security gate should treat
+# as passing.
 _SEVERITY_ORDER = {"not_found": 0, "recent": 1, "error": 2, "private": 3, "ok": 4}
 
 _UNVERIFIED_DETAIL = "not on the public registry, but a private/extra index is configured — not verified"
@@ -195,9 +207,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of text.")
     parser.add_argument(
         "--fail-on",
-        choices=["not_found", "recent", "never"],
+        choices=["not_found", "recent", "error", "never"],
         default="not_found",
-        help="Minimum severity that causes a non-zero exit code (default: not_found).",
+        help="Minimum severity that causes a non-zero exit code (default: not_found). "
+        "'error' also fails the build on a registry lookup that couldn't be completed "
+        "(network failure, rate limit, registry outage) instead of silently passing.",
     )
     args = parser.parse_args(argv)
 

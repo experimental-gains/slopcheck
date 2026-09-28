@@ -535,14 +535,14 @@ def test_fail_on_rejects_an_invalid_choice():
     assert exc_info.value.code == 2
 
 
-def test_fail_on_accepts_all_three_documented_values(tmp_path: Path):
-    # Regression test for mutmut survivors that mangled one of the three
+def test_fail_on_accepts_all_four_documented_values(tmp_path: Path):
+    # Regression test for mutmut survivors that mangled one of the four
     # `choices=[...]` strings (e.g. "not_found" -> "XXnot_foundXX" or
     # "NOT_FOUND"). Actually passing each value end-to-end and confirming
     # it's accepted is more direct than parsing it back out of `--help`.
     (tmp_path / "requirements.txt").write_text("requests\n")
     with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"requests"})}):
-        for value in ("not_found", "recent", "never"):
+        for value in ("not_found", "recent", "error", "never"):
             assert cli.main([str(tmp_path), "--fail-on", value]) == 0
 
 
@@ -612,6 +612,51 @@ def test_fail_on_recent_treats_recent_as_failing(tmp_path: Path):
     with patch.dict(cli.CHECKERS, {"pypi": fake_checker}):
         exit_code = cli.main([str(tmp_path), "--fail-on", "recent"])
     assert exit_code == 1
+
+
+def test_error_status_never_fails_the_build_unless_explicitly_requested(tmp_path: Path):
+    # Regression test for a real gap: a registry lookup that couldn't
+    # complete at all (network failure, rate limit, registry outage) was
+    # reported as an "error" row but had no way to fail the build under
+    # *any* `--fail-on` setting -- not even `--fail-on recent`, the
+    # strictest choice that existed before "error" was added to
+    # `choices=[...]`. That's a silent fail-open: a CI run where the
+    # registry couldn't be reached for a genuinely hallucinated name
+    # still exited 0. The only dependency here is one whose lookup
+    # errors, so any exit code other than 0 for "not_found"/"recent"
+    # means the old gap has reopened.
+    (tmp_path / "requirements.txt").write_text("some-unverifiable-pkg\n")
+
+    def fake_checker(name: str) -> LookupResult:
+        return LookupResult("error", "Connection timed out")
+
+    with patch.dict(cli.CHECKERS, {"pypi": fake_checker}):
+        assert cli.main([str(tmp_path), "--fail-on", "not_found"]) == 0
+        assert cli.main([str(tmp_path), "--fail-on", "recent"]) == 0
+
+
+def test_fail_on_error_treats_error_as_failing(tmp_path: Path):
+    (tmp_path / "requirements.txt").write_text("some-unverifiable-pkg\n")
+
+    def fake_checker(name: str) -> LookupResult:
+        return LookupResult("error", "Connection timed out")
+
+    with patch.dict(cli.CHECKERS, {"pypi": fake_checker}):
+        exit_code = cli.main([str(tmp_path), "--fail-on", "error"])
+    assert exit_code == 1
+
+
+def test_fail_on_error_still_does_not_fail_on_a_private_result(tmp_path: Path):
+    # "private" must stay out of reach of even the strictest `--fail-on`
+    # choice -- it's a deliberate downgrade for a name genuinely expected
+    # on a configured private index (see `_UNVERIFIED_DETAIL`), not an
+    # unverifiable lookup like "error". `--fail-on error`'s threshold
+    # must not accidentally widen far enough to also catch "private".
+    (tmp_path / "requirements.txt").write_text("--extra-index-url https://example.com/simple\nsome-private-pkg\n")
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        exit_code = cli.main([str(tmp_path), "--fail-on", "error"])
+    assert exit_code == 0
 
 
 def test_npm_scoped_registry_only_exempts_that_scope(tmp_path: Path, monkeypatch):
