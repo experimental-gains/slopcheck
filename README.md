@@ -122,6 +122,26 @@ key/dict at all is left alone (still "ok") — that shape doesn't appear
 reachable for a genuine 200 response, since PyPI never creates a
 project record without at least one completed release.
 
+A `requirements.txt` line ending in a backslash now gets joined with
+the line(s) that follow it before slopcheck tries to parse a
+requirement out of it, the same way pip's own requirements-file reader
+does (fixed in v0.1.54). `pip-compile --generate-hashes` (part of the
+widely-used pip-tools) routinely wraps a spec too long for one line
+this way — e.g. a long extras list pushed onto its own line, with the
+version specifier continued on the next. Confirmed live with real pip
+25.1.1: a two-line file reading `totally-hallucinated-xyz-987 \` then
+`    ==1.2.3` made `pip install --dry-run -r` genuinely join them and
+fail resolving the combined requirement — "Could not find a version
+that satisfies the requirement totally-hallucinated-xyz-987==1.2.3
+(from versions: none)" — the exact failure shape of a hallucinated
+name. Before this fix, slopcheck's line-by-line reader had no
+continuation-joining at all: the first line's trailing `\` doesn't
+match any branch of the name-and-version regex, so it was silently
+dropped, and the bare version-only continuation line never matches
+either (no leading package-name character) — the dependency never got
+checked, and slopcheck reported a clean scan for a file a real `pip
+install -r` would genuinely fail on.
+
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
 Those are pip's and npm's own errors for exactly this situation — a
@@ -169,7 +189,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.53
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.54
 ```
 
 ## Usage
@@ -195,7 +215,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.53
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.54
     slopcheck
 ```
 
@@ -204,7 +224,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.53
+    rev: v0.1.54
     hooks:
       - id: slopcheck
 ```
