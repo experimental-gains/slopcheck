@@ -60,14 +60,45 @@ def check_pypi(name: str) -> LookupResult:
     if data is None:
         return LookupResult("not_found", "no such project on PyPI")
 
+    release_files = [
+        file_info
+        for release_files in data.get("releases", {}).values()
+        for file_info in release_files
+    ]
     upload_times = [
         file_info["upload_time_iso_8601"]
-        for release_files in data.get("releases", {}).values()
         for file_info in release_files
         if "upload_time_iso_8601" in file_info
     ]
     if not upload_times:
         return LookupResult("ok")
+
+    # PEP 592: a real installer ignores every yanked release unless a caller
+    # pins to its exact version (`==`/`===`) -- and slopcheck's Dependency
+    # carries no version constraint at all (see this module's own docstring
+    # and parsers.py's: "Only the package name is needed ... since the whole
+    # point is checking whether the name exists in a registry at all"), so
+    # it always models the unqualified `pip install <name>` case, the one
+    # PEP 592 makes fail outright once every uploaded file is yanked.
+    # Confirmed live with real pip 25.1.1 against a from-scratch local PEP
+    # 503 index serving a single release with its only file marked
+    # `data-yanked`: `pip install totally-yanked-test-pkg` (no version pin)
+    # genuinely fails with "ERROR: Ignored the following yanked versions:
+    # 1.0.0" / "Could not find a version that satisfies the requirement ...
+    # (from versions: none)" / "No matching distribution found" -- the
+    # identical failure shape pip gives for a name that doesn't exist at
+    # all -- while `pip install totally-yanked-test-pkg==1.0.0` (exact pin)
+    # still installs it, with a warning. A control package on the same
+    # index with no yanked files installed normally either way, confirming
+    # the index setup itself wasn't the cause. Since slopcheck can never see
+    # or check a pin, "every uploaded file across every release is yanked"
+    # is exactly the same as "not found" from its perspective -- the same
+    # "registry still answers 200 for an entity real tooling treats as
+    # gone" shape already fixed for npm's unpublished state, just PyPI's
+    # own distinct mechanism for it.
+    if all(file_info.get("yanked") for file_info in release_files):
+        return LookupResult("not_found", "every release has been yanked on PyPI")
+
     age_days = _days_since(min(upload_times))
     if age_days < _RECENT_DAYS:
         return LookupResult("recent", f"first published {age_days:.0f} days ago")

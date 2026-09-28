@@ -32,6 +32,62 @@ def test_check_pypi_flags_recent_package():
     assert result.status == "recent"
 
 
+def test_check_pypi_all_releases_yanked_is_not_found():
+    # Real registry shape (captured live via https://pypi.org/pypi/tzdata/json,
+    # which confirmed PyPI's JSON API carries a per-file "yanked" bool on
+    # every release, old and new) for a package where every uploaded file of
+    # every release has been yanked: real pip 25.1.1 against a from-scratch
+    # local index reproducing this exact shape refuses an unqualified
+    # `pip install <name>` outright ("No matching distribution found"), the
+    # same failure shape as a name that was never published at all -- so
+    # this must report not_found, not "ok" or "recent".
+    data = {
+        "releases": {
+            "1.0.0": [
+                {
+                    "upload_time_iso_8601": _iso(400),
+                    "yanked": True,
+                    "yanked_reason": "critical bug",
+                }
+            ],
+        }
+    }
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_pypi("totally-yanked-test-pkg")
+    assert result.status == "not_found"
+    assert result.detail == "every release has been yanked on PyPI"
+
+
+def test_check_pypi_some_releases_yanked_is_not_flagged():
+    # A package with a mix of yanked and non-yanked releases still has a
+    # real installable candidate for an unqualified install (real pip picks
+    # the newest non-yanked one) -- only *all* releases being yanked should
+    # trigger the not_found downgrade.
+    data = {
+        "releases": {
+            "1.0.0": [{"upload_time_iso_8601": _iso(400), "yanked": True}],
+            "2.0.0": [{"upload_time_iso_8601": _iso(300), "yanked": False}],
+        }
+    }
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_pypi("mostly-fine-package")
+    assert result.status == "ok"
+
+
+def test_check_pypi_all_yanked_but_recent_is_still_not_found():
+    # Even a freshly (and fully) yanked package should report not_found,
+    # not "recent" -- there is no installable candidate for an unqualified
+    # install regardless of how new the yanked upload was.
+    data = {
+        "releases": {
+            "0.0.1": [{"upload_time_iso_8601": _iso(2), "yanked": True}],
+        }
+    }
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_pypi("brand-new-but-yanked")
+    assert result.status == "not_found"
+
+
 def test_check_npm_not_found():
     with patch.object(registries, "_get_json", return_value=None):
         result = registries.check_npm("this-package-does-not-exist-xyz")
