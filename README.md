@@ -72,7 +72,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.44
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.45
 ```
 
 ## Usage
@@ -98,7 +98,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.44
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.45
     slopcheck
 ```
 
@@ -107,7 +107,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.44
+    rev: v0.1.45
     hooks:
       - id: slopcheck
 ```
@@ -776,6 +776,23 @@ install -e .[dev]` covering both the project's tests and this tool) —
 a real, common setup, not an edge case — flagging a genuinely
 private-only dependency as a plain hallucination instead of downgrading
 it to private.
+
+A `package.json`'s plain `"workspaces"` field (npm 7+ native
+workspaces, or Yarn Classic's array/object forms) is now recognized
+(fixed in v0.1.45): a sibling workspace member named with an ordinary
+semver range — not just pnpm's/Yarn Berry's explicit `workspace:`
+protocol prefix, which this tool already skipped — resolves entirely
+locally via a symlink and never reaches the registry. Confirmed live
+(npm 9.2.0 and Yarn Classic 1.22.22 against a from-scratch two-package
+workspace): npm's own `--loglevel silly` trace showed the dependency
+placed from a local `file:` path with zero registry requests for that
+name, and Yarn's verbose log showed it symlinking the local directory
+instead. This is the default layout for Lerna/Nx/Turborepo monorepos,
+not an obscure shape — npm's own monorepo (`npm/cli`) dogfoods it,
+listing `@npmcli/docs`/`@npmcli/mock-registry`/`@npmcli/mock-globals`
+as plain-semver `devDependencies` even though each is `"private": true`
+and genuinely 404s on the public registry. Before this fix, every such
+name was reported as a plain `not_found` hallucination.
 
 ## requirements.txt inline comments
 
