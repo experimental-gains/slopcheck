@@ -1240,6 +1240,40 @@ def test_parse_setup_cfg_skips_urls_and_missing_sections(tmp_path: Path):
     assert names == {"requests"}
 
 
+def test_parse_setup_cfg_single_line_semicolon_list(tmp_path: Path):
+    # Real-world find: setuptools' own list parser (`ConfigHandler._parse_list`,
+    # shared by `install_requires`/`setup_requires`/`options.extras_require`)
+    # splits a value with no newline in it on ";" rather than "\n" — confirmed
+    # live against setuptools 84.0.0 (this project's own pinned minimum):
+    # `setuptools.config.setupcfg.read_configuration` on
+    # `install_requires = requests;totally-hallucinated-package-xyz-123`
+    # returns `['requests', 'totally-hallucinated-package-xyz-123']`, two
+    # real requirements. Before this fix, `_setup_cfg_list_deps` only ever
+    # split on newlines, so a single-line semicolon list like this one was
+    # treated as one whole line and matched by `_REQ_LINE_RE` as a single
+    # requirement named "requests" — everything after the first ";"
+    # (including a second, hallucinated package name) was silently
+    # swallowed as if it were an environment marker and never checked.
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text(
+        "[options]\n"
+        "install_requires = requests;totally-hallucinated-package-xyz-123\n"
+        "setup_requires = setuptools_scm;another-hallucinated-pkg-xyz456\n"
+        "\n"
+        "[options.extras_require]\n"
+        "test = pytest;yet-another-hallucinated-pkg-xyz789\n"
+    )
+    names = {dep.name for dep in parse_setup_cfg(cfg)}
+    assert names == {
+        "requests",
+        "totally-hallucinated-package-xyz-123",
+        "setuptools_scm",
+        "another-hallucinated-pkg-xyz456",
+        "pytest",
+        "yet-another-hallucinated-pkg-xyz789",
+    }
+
+
 def test_find_manifests_discovers_setup_cfg(tmp_path: Path):
     (tmp_path / "setup.cfg").write_text("[options]\ninstall_requires =\n    requests\n")
     found = {p.name for p in find_manifests(tmp_path)}

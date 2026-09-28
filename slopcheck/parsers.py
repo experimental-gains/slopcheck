@@ -460,9 +460,38 @@ def parse_pipfile(path: Path) -> list[Dependency]:
 
 
 def _setup_cfg_list_deps(value: str, path: Path) -> list[Dependency]:
+    """Split a setup.cfg list-valued option the same way setuptools itself does.
+
+    setuptools' own list parser (`ConfigHandler._parse_list`, shared by
+    `install_requires` via `_parse_requirements_list`, `setup_requires`, and
+    every `[options.extras_require]` value — confirmed by reading
+    `setuptools/config/setupcfg.py` from setuptools 84.0.0, this project's
+    own pinned minimum) makes an either/or choice at the whole-value level:
+    if the raw config value contains a newline at all, it splits on lines;
+    otherwise it splits on `;`. A single physical line like `install_requires
+    = requests;totally-hallucinated-package-xyz-123` is real, current syntax
+    setuptools genuinely expands into two separate requirements — confirmed
+    live: `setuptools.config.setupcfg.read_configuration` on exactly that
+    value returns `['requests', 'totally-hallucinated-package-xyz-123']`.
+
+    This function used to always split on newlines only (`value.splitlines()`),
+    regardless of whether the value contained any `;`-separated entries at
+    all. For a single-line semicolon list, that treats the whole string as
+    one line, which `_REQ_LINE_RE` then matches as a single requirement:
+    the first name before the first `;` becomes the extracted package, and
+    everything after it (including any further `;`-separated names) is
+    swallowed by the regex's own trailing `[<>=!~;].*` alternative — the
+    same shape that legitimately matches a real PEP 508 environment marker
+    like `; python_version < "3.8"`. A hallucinated package placed second
+    or later in a single-line semicolon list was silently never even seen,
+    let alone checked against PyPI — a real false negative, not a cosmetic
+    style difference, since a real `pip install`/`python setup.py install`
+    resolves it exactly the same as a name on its own line.
+    """
+    chunks = value.splitlines() if "\n" in value else value.split(";")
     deps = []
-    for raw_line in value.splitlines():
-        line = raw_line.strip()
+    for raw_chunk in chunks:
+        line = raw_chunk.strip()
         if not line:
             continue
         line = _strip_inline_comment(line)
