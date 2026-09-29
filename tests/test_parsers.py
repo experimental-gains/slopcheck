@@ -1246,6 +1246,33 @@ def test_parse_pipfile_skips_non_registry_sources(tmp_path: Path):
     assert names == {"requests", "pytest"}
 
 
+def test_parse_pipfile_skips_svn_hg_bzr_vcs_sources(tmp_path: Path):
+    # Real-world find: Pipenv's own VCS_LIST (pipenv/utils/constants.py in
+    # Pipenv 2026.8.0) is `("git", "svn", "hg", "bzr")` -- its schema
+    # (pipenv.vendor.plette.models.packages.PackageSpecfiers) accepts all
+    # four as equally valid dependency-spec keys, and its own `is_vcs()`
+    # helper treats them identically. Confirmed live: `pipenv lock -v`
+    # against a Pipfile entry `{svn = "svn://127.0.0.1:9/repo"}` genuinely
+    # dispatched to pip's own Subversion VCS backend and never queried PyPI
+    # for that name -- the same non-registry-source shape as `git`, which
+    # `_is_pipfile_registry_dep` already handled, but `svn`/`hg`/`bzr` did
+    # not: before this fix, each of these entries was sent to PyPI and
+    # reported as a plain hallucination unless the name happened to be
+    # independently published there.
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        """
+        [packages]
+        requests = "*"
+        internal-svn-lib = { svn = "svn://example.com/internal-svn-lib" }
+        internal-hg-lib = { hg = "https://example.com/internal-hg-lib" }
+        internal-bzr-lib = { bzr = "bzr+ssh://example.com/internal-bzr-lib" }
+        """
+    )
+    names = {dep.name for dep in parse_pipfile(pipfile)}
+    assert names == {"requests"}
+
+
 def test_find_manifests_discovers_pipfile(tmp_path: Path):
     (tmp_path / "Pipfile").write_text('[packages]\nrequests = "*"\n')
     found = {p.name for p in find_manifests(tmp_path)}

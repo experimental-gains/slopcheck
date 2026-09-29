@@ -465,9 +465,32 @@ def _is_pipfile_registry_dep(spec) -> bool:
     version constraint — including the bare `"*"` Pipenv always writes for
     an unpinned `pipenv install <name>` — still resolves against PyPI and
     should be checked; only a table with a `git`/`path`/`file` key opts out.
+
+    `git` isn't the only VCS key Pipenv recognizes, though: its own schema
+    (`pipenv.vendor.plette.models.packages.PackageSpecfiers`, read directly
+    from Pipenv 2026.8.0's installed source) lists `git`, `svn`, `hg`, and
+    `bzr` side by side as equally valid dependency-spec keys — Pipenv's own
+    `VCS_LIST` constant (`pipenv/utils/constants.py`) is exactly `("git",
+    "svn", "hg", "bzr")`, and Pipenv treats all four identically when
+    deciding whether an entry is VCS-sourced rather than index-sourced
+    (`pipenv/utils/dependencies.py`'s own `is_vcs()` helper: `any(key for
+    key in pipfile_entry if key in VCS_LIST)`). Confirmed live (Pipenv
+    2026.8.0, `pipenv lock -v` against a Pipfile with `totally-hallucinated-
+    svn-test-xyz-123 = {svn = "svn://127.0.0.1:9/repo"}`): Pipenv genuinely
+    dispatched to pip's own Subversion VCS backend
+    (`unpack_vcs_link`/`subversion.py`'s `fetch_new`, which tried to run the
+    `svn` command) and never queried PyPI for that name at all — the same
+    non-registry-source shape as `git`, just for a different backend.
+    Before this fix, only `git`/`path`/`file` opted a spec out of the
+    registry check here, so an `svn`/`hg`/`bzr`-sourced Pipfile dependency
+    (a real, still-current Pipenv feature, not a removed one) was sent to
+    PyPI and reported as a plain `not_found` hallucination whenever the
+    name wasn't independently published there — a false positive on a
+    dependency a real `pipenv install`/`pipenv lock` resolves fine via its
+    own VCS.
     """
     if isinstance(spec, dict):
-        return not any(key in spec for key in ("git", "path", "file"))
+        return not any(key in spec for key in ("git", "svn", "hg", "bzr", "path", "file"))
     return True
 
 
