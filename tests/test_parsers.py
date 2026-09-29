@@ -1480,6 +1480,54 @@ def test_parse_setup_cfg_install_requires_file_directive(tmp_path: Path):
     assert sources["another-hallucinated-pkg-xyz654"] == str(tmp_path / "extra-dev.txt")
 
 
+def test_parse_setup_cfg_skips_self_referential_extras(tmp_path: Path):
+    # Real-world find: `parse_pyproject_toml` already skips a PEP 621
+    # project's own self-referential extra (an [project.optional-
+    # dependencies] entry naming the *current* project with a different
+    # combination of its own extras, e.g. `all = ["your-project[gui,cli]"]`,
+    # so an umbrella extra doesn't need a hand-maintained copy of every
+    # other extra's list) via `_self_referential_name`, but `parse_setup_cfg`
+    # had no equivalent skip-set at all. The same pattern is exactly as
+    # legal for setup.cfg's own [options.extras_require]: it's a property of
+    # how pip resolves a self-named Requires-Dist against the package
+    # already being installed, not something specific to PEP 621 syntax.
+    # Confirmed live (setuptools 84.0.0, real pip 25.x): a from-scratch
+    # setup.cfg-only project ([metadata] name = totally-hallucinated-
+    # selfref-test-xyz-123, [options.extras_require] all = totally-
+    # hallucinated-selfref-test-xyz-123[gui], gui = pillow, no PEP 621
+    # [project] table at all) had `pip install --dry-run -v ".[all]"`
+    # resolve the "all"/"gui" extras and install pillow without ever issuing
+    # a single request for "totally-hallucinated-selfref-test-xyz-123"
+    # itself. Before this fix, `parse_setup_cfg` emitted that self-reference
+    # as an ordinary dependency, and a real `slopcheck` run against the
+    # reproduction project above genuinely flagged it "NOT FOUND (no such
+    # project on PyPI)" — a false positive for the exact not-yet-published-
+    # project case this pattern exists for. The name is matched PEP
+    # 503-normalized (case/separator-insensitive), like every other
+    # name-equality check in this module, and `setup_requires` is
+    # deliberately unaffected: it installs into an isolated build
+    # environment before the package's own metadata/extras exist at all, so
+    # a self-reference there wouldn't resolve locally the way it does in the
+    # two fields covered here.
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text(
+        "[metadata]\n"
+        "name = Totally-Hallucinated_Selfref.Test-XYZ-123\n"
+        "\n"
+        "[options]\n"
+        "install_requires =\n"
+        "    requests\n"
+        "\n"
+        "[options.extras_require]\n"
+        "gui =\n"
+        "    pillow\n"
+        "all =\n"
+        "    totally-hallucinated-selfref-test-xyz-123[gui]\n"
+    )
+    names = {dep.name for dep in parse_setup_cfg(cfg)}
+    assert names == {"requests", "pillow"}
+
+
 def test_find_manifests_discovers_setup_cfg(tmp_path: Path):
     (tmp_path / "setup.cfg").write_text("[options]\ninstall_requires =\n    requests\n")
     found = {p.name for p in find_manifests(tmp_path)}

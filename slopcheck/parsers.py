@@ -638,6 +638,47 @@ def _setup_cfg_requirements_value(value: str, path: Path) -> list[Dependency]:
     return deps
 
 
+def _setup_cfg_self_referential_name(parser: configparser.ConfigParser) -> set[str]:
+    """setup.cfg's own `[metadata] name`, PEP 503-normalized, as a self-referential-extra skip-set.
+
+    `parse_pyproject_toml` already skips a PEP 621 project's own
+    self-referential extra (`_self_referential_name` above: an
+    `[project.optional-dependencies]`/`[dependency-groups]` entry naming the
+    *current* project with a different combination of its own extras, e.g.
+    `all = ["your-project-name[gui, cli]"]`, so an umbrella extra doesn't
+    need a hand-maintained copy of every other extra's dependency list). That
+    same pattern is exactly as legal, and exactly as common, for a legacy
+    `setup.cfg`-based project's `[options.extras_require]` — it's a property
+    of pip's own dependency resolution (a self-named `Requires-Dist` in the
+    built package's own metadata is always satisfied by the package already
+    being installed, regardless of which manifest format declared it), not
+    something specific to PEP 621's declaration syntax.
+
+    Confirmed live (setuptools 84.0.0, real pip 25.x, a from-scratch
+    `setup.cfg`-only project — `[metadata] name = totally-hallucinated-
+    selfref-test-xyz-123`, `[options.extras_require] all =
+    totally-hallucinated-selfref-test-xyz-123[gui]`, `gui = pillow`, no PEP
+    621 `[project]` table at all): `pip install --dry-run -v ".[all]"`
+    resolved the `all`/`gui` extras and installed `pillow` fine, never
+    issuing a single request for `totally-hallucinated-selfref-test-xyz-123`
+    itself — the self-reference is satisfied locally by the package being
+    built, exactly like the PEP 621 case. Before this fix, `parse_setup_cfg`
+    had no skip-set at all (unlike `parse_pyproject_toml`), so this same
+    self-reference was emitted as an ordinary dependency and flagged
+    `not_found` for any not-yet-published project using this pattern — the
+    exact false positive `_self_referential_name` already exists to prevent
+    for pyproject.toml, just never ported to this sibling parser for the
+    older manifest format. Matched PEP 503-normalized, the same rule
+    `_self_referential_name` and every other name-equality check in this
+    module uses, since a `[metadata] name` value can differ in case/
+    separators from how it's written inside `[options.extras_require]`.
+    """
+    if not parser.has_option("metadata", "name"):
+        return set()
+    name = parser.get("metadata", "name")
+    return {_normalize_name(name)} if name else set()
+
+
 def parse_setup_cfg(path: Path) -> list[Dependency]:
     """Parse setuptools' legacy `setup.cfg` `[options]`/`[options.extras_require]`.
 
@@ -693,18 +734,34 @@ def parse_setup_cfg(path: Path) -> list[Dependency]:
     to newline-splitting whenever the value contains a `\n`, which every
     real multi-line setup.cfg list does), so it reuses
     `_setup_cfg_list_deps` unchanged.
+
+    `[metadata] name`'s own self-referential-extra uses are skipped from
+    `install_requires`/`[options.extras_require]` the same way
+    `parse_pyproject_toml` skips PEP 621's equivalent — see
+    `_setup_cfg_self_referential_name`. Deliberately NOT applied to
+    `setup_requires`: that field is resolved by a separate isolated
+    build-environment install step, before the package's own metadata (and
+    thus its own extras) exists at all, so a self-reference there wouldn't
+    resolve locally the way it does in the two fields above — mirroring how
+    `parse_pyproject_toml` likewise never filters `[build-system] requires`
+    against its own self-referential-name skip-set.
     """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read_string(path.read_text(encoding="utf-8-sig"), source=str(path))
+    skip_names = _setup_cfg_self_referential_name(parser)
 
     deps = []
     if parser.has_option("options", "install_requires"):
-        deps.extend(_setup_cfg_requirements_value(parser.get("options", "install_requires"), path))
+        for dep in _setup_cfg_requirements_value(parser.get("options", "install_requires"), path):
+            if _normalize_name(dep.name) not in skip_names:
+                deps.append(dep)
     if parser.has_option("options", "setup_requires"):
         deps.extend(_setup_cfg_list_deps(parser.get("options", "setup_requires"), path))
     if parser.has_section("options.extras_require"):
         for value in parser["options.extras_require"].values():
-            deps.extend(_setup_cfg_requirements_value(value, path))
+            for dep in _setup_cfg_requirements_value(value, path):
+                if _normalize_name(dep.name) not in skip_names:
+                    deps.append(dep)
     return deps
 
 
