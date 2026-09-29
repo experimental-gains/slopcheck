@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.60
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.61
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.60
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.61
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.60
+    rev: v0.1.61
     hooks:
       - id: slopcheck
 ```
@@ -532,6 +532,23 @@ file directly on the command line (`slopcheck requirements_test.txt`,
 rather than the auto-discovered exact name `requirements.txt`) used to
 crash with an unhandled `KeyError` instead of scanning it; it's now
 handled the same as `requirements.txt`.
+
+The `-r`/`--requirement`/`-c`/`--constraint` directives above are now
+recognized in every separator form pip's own `optparse`-based
+requirements-file parser accepts, not just the spaced-out one (fixed in
+v0.1.61) — `-rbase.txt` (no space between the short flag and its
+argument) and `--requirement=base.txt` (long flag joined with `=`) are
+both real, `optparse`-standard syntax pip genuinely resolves
+identically to `-r base.txt`/`--requirement base.txt`. Confirmed live
+against installed pip 25.1.1
+(`pip._internal.req.req_file.parse_requirements`): both forms recursed
+into the referenced file for real. Before this fix, the directive
+regexes required literal whitespace after the flag, so either form fell
+through completely unrecognized — not matched as `-r`, not matched as
+`-c`, not matched as a plain dependency name either (the line still
+starts with `-`) — and the whole line, along with every dependency
+declared only in the file it pointed at, was silently dropped from the
+scan with no error at all.
 
 setuptools' own [dynamic metadata](https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html#dynamic-metadata)
 feature lets `[project].dynamic` list `dependencies`/
