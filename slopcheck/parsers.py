@@ -1076,6 +1076,24 @@ def _npm_looks_like_hosted_git_or_path(version: str) -> bool:
     regardless of what non-registry source its replacement comes from), so
     they're unaffected by this.
 
+    A version value starting with a literal `.` is a local-path reference
+    too, even with no `/` anywhere in it — reading `resolve()`'s own source
+    shows it checks this (`isFilespec`, `/^(?:[.]|~[/]|[/]|[a-zA-Z]:)/`)
+    *before* it ever reaches the `HostedGit`/slash fallback above, so `"."`
+    and `".."` alone both qualify, not just multi-segment paths like
+    `"../foo"` (already caught by the `"/" in version` check). Confirmed
+    live end-to-end (npm 9.15.0, real `npm install`, no `--dry-run`): a
+    scratch `package.json` with `"totally-hallucinated-selfref-xyz-987":
+    "."` in `devDependencies` installed cleanly (`node_modules/totally-
+    hallucinated-selfref-xyz-987` created, pointing back at the project's
+    own directory) with zero requests to `registry.npmjs.org` for that name
+    anywhere in a full `--loglevel silly` trace — the only registry hit was
+    the unrelated bulk security-advisory POST every `npm install` makes.
+    Before this fix, `_npm_non_registry_version(".")` returned `False`
+    (no `/`, no recognized prefix), so slopcheck sent this name to the
+    public npm registry and would report it "NOT FOUND" — a false positive
+    on a dependency a real `npm install` resolves entirely locally.
+
     Deliberately does NOT match Yarn Berry's own `patch:<name>@<descriptor>#
     <path>` protocol (applying a local patch file on top of an otherwise
     normal dependency), even though a real one always contains a `/` (the
@@ -1103,7 +1121,7 @@ def _npm_looks_like_hosted_git_or_path(version: str) -> bool:
     """
     if version.startswith(_NPM_PATCH_PREFIX):
         return False
-    return "/" in version
+    return "/" in version or version.startswith(".")
 
 
 def _npm_non_registry_version(version: str) -> bool:

@@ -263,6 +263,41 @@ def test_parse_package_json_skips_gist_shorthand(tmp_path: Path):
     assert names == {"react"}
 
 
+def test_parse_package_json_skips_bare_dot_local_path(tmp_path: Path):
+    # npm-package-arg's own resolve() (read directly from
+    # /usr/share/nodejs/npm-package-arg/lib/npa.js on this box) checks a
+    # version value against `isFilespec`
+    # (`/^(?:[.]|~[/]|[/]|[a-zA-Z]:)/`) *before* it ever reaches the
+    # HostedGit/slash fallback `_npm_looks_like_hosted_git_or_path` already
+    # mirrors -- so a version value starting with a literal "." resolves
+    # locally even with no "/" anywhere in it, not just multi-segment paths
+    # like "../foo" (already caught by the "/" check). Confirmed live
+    # end-to-end (npm 9.15.0, real `npm install`, no --dry-run): a scratch
+    # package.json with `"totally-hallucinated-selfref-xyz-987": "."` in
+    # devDependencies installed cleanly (node_modules/totally-hallucinated-
+    # selfref-xyz-987 created, pointing back at the project's own
+    # directory) with zero requests to registry.npmjs.org for that name in
+    # a full --loglevel silly trace -- the only registry hit was the
+    # unrelated bulk security-advisory POST every `npm install` makes.
+    # Before this fix, slopcheck sent this name to the public npm registry
+    # and would report it "NOT FOUND" -- a false positive on a dependency a
+    # real `npm install` resolves entirely locally.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "devDependencies": {
+                    "totally-hallucinated-selfref-xyz-987": ".",
+                    "totally-hallucinated-parent-xyz-987": "..",
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"react"}
+
+
 def test_parse_package_json_still_checks_yarn_patch_protocol_deps(tmp_path: Path):
     # Confirmed live (Yarn Berry 4.5.0, `yarn install` against a scratch
     # "patch:totally-hallucinated-name-xyz-987@npm%3A1.0.0#~/patches/fake.patch"
