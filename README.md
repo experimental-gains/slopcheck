@@ -189,7 +189,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.54
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.55
 ```
 
 ## Usage
@@ -215,7 +215,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.54
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.55
     slopcheck
 ```
 
@@ -224,7 +224,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.54
+    rev: v0.1.55
     hooks:
       - id: slopcheck
 ```
@@ -354,6 +354,18 @@ including the same `@version`-scoped-key suffix stripping (fixed in
 v0.1.14 — earlier versions only read the root-level `overrides` key,
 so every package named under `pnpm.overrides` was silently never
 checked).
+
+A `resolutions` entry's *value* — not just its key — is now checked when
+it's itself an `npm:` alias (e.g. `"is-odd/**/is-number": "npm:totally-
+hallucinated-xyz-42@1.0.0"` substitutes a completely different package for
+the one the key names) (fixed in v0.1.55 — earlier versions only ever read
+the pattern key, so an aliased entry checked the key-derived name — a real,
+unrelated package in this example — and never the name Yarn actually fetches
+from the registry). Confirmed live with Yarn Classic 1.22.22: `yarn install`
+against exactly this shape genuinely queried
+`https://registry.yarnpkg.com/totally-hallucinated-xyz-42` and failed with a
+real 404, while the pre-fix key-derived name (`is-number`) was never even
+looked up.
 
 A directory scan (`slopcheck` with no arguments, or `slopcheck <dir>`)
 now recurses into subdirectories to pick up every workspace member's
