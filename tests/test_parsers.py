@@ -1161,6 +1161,36 @@ def test_parse_requirements_txt_recurses_into_long_form_requirement_flag(tmp_pat
     assert names == {"requests", "flask"}
 
 
+def test_parse_requirements_txt_recurses_into_no_space_short_flag(tmp_path: Path):
+    # pip's requirements-file option parser is a plain `optparse.OptionParser`
+    # (`pip._internal.req.req_file.SUPPORTED_OPTIONS`), which accepts a short
+    # option's argument concatenated with no separator at all, not just
+    # space-separated — live-verified directly against installed pip 25.1.1
+    # (`pip._internal.req.req_file.parse_requirements`): a nested file named
+    # via "-rbase.txt" (no space) genuinely resolved and recursed into
+    # base.txt, identically to "-r base.txt". Before this fix, the regex
+    # required literal whitespace after "-r", so this real, pip-accepted
+    # form fell through unmatched and the nested file's hallucinated
+    # dependency was never checked at all.
+    (tmp_path / "base.txt").write_text("totally-fake-hallucinated-pkg==1.0\n")
+    req = tmp_path / "requirements.txt"
+    req.write_text("-rbase.txt\nflask\n")
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"totally-fake-hallucinated-pkg", "flask"}
+
+
+def test_parse_requirements_txt_recurses_into_equals_form_long_flag(tmp_path: Path):
+    # Same optparse gap as the no-space short-flag case above, for the long
+    # option's "=" form instead: live-verified against real pip 25.1.1 that
+    # "--requirement=base.txt" genuinely resolves and recurses into
+    # base.txt, identically to "--requirement base.txt".
+    (tmp_path / "base.txt").write_text("totally-fake-hallucinated-pkg==1.0\n")
+    req = tmp_path / "requirements.txt"
+    req.write_text("--requirement=base.txt\nflask\n")
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"totally-fake-hallucinated-pkg", "flask"}
+
+
 def test_parse_requirements_txt_does_not_recurse_into_constraints_file(tmp_path: Path):
     # A constraints file (-c/--constraint) only pins versions of packages
     # already required elsewhere — a name that appears *only* in it is never
@@ -1169,6 +1199,21 @@ def test_parse_requirements_txt_does_not_recurse_into_constraints_file(tmp_path:
     (tmp_path / "constraints.txt").write_text("only-a-version-pin==1.0\n")
     req = tmp_path / "requirements.txt"
     req.write_text("-c constraints.txt\nrequests\n")
+    names = {dep.name for dep in parse_requirements_txt(req)}
+    assert names == {"requests"}
+
+
+def test_parse_requirements_txt_no_space_constraint_flag_not_treated_as_dependency(tmp_path: Path):
+    # Same no-space-separator form as "-rbase.txt" above, for "-c" instead —
+    # live-verified against real pip 25.1.1 that "-cbase.txt" (no space)
+    # resolves identically to "-c base.txt", i.e. as a constraints
+    # directive, not a package name. Guards against a regression where
+    # widening _REQ_FILE_RE's separator handling accidentally makes this
+    # line match as a nested -r/--requirement recursion instead of staying
+    # a recognized, skipped constraints directive.
+    (tmp_path / "constraints.txt").write_text("only-a-version-pin==1.0\n")
+    req = tmp_path / "requirements.txt"
+    req.write_text("-cconstraints.txt\nrequests\n")
     names = {dep.name for dep in parse_requirements_txt(req)}
     assert names == {"requests"}
 

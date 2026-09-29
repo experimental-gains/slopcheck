@@ -143,7 +143,32 @@ def _join_backslash_continuations(text: str) -> list[str]:
 # silently never checked at all — the tool's core job failing silently on
 # a standard, real-world requirements.txt composition pattern, not an edge
 # case.
-_REQ_FILE_RE = re.compile(r"^(?:-r|--requirement)\s+(?P<target>.+?)\s*$")
+#
+# pip's own requirements-file option parser is a plain `optparse.OptionParser`
+# (confirmed by reading `pip._internal.req.req_file.SUPPORTED_OPTIONS`
+# directly), which accepts a short option's argument either space-separated
+# (`-r base.txt`) *or* concatenated with no separator at all (`-rbase.txt`),
+# and a long option's argument either space-separated or joined with `=`
+# (`--requirement=base.txt`) — optparse's standard, documented behavior for
+# any option that takes a value, not something specific to pip. Live-verified
+# directly against installed pip 25.1.1
+# (`pip._internal.req.req_file.parse_requirements`): both `-rbase.txt` and
+# `--requirement=base.txt` genuinely resolved and recursed into `base.txt`
+# exactly like the spaced form already handled below, while
+# `--requirementbase.txt` (long option with no separator at all — not a
+# form optparse supports for long options) correctly raised
+# `RequirementsFileParseError` in real pip, so it's deliberately left
+# unmatched here too. Before this fix, the regex required literal
+# whitespace after the flag (`\s+`), so either real, accepted variant fell
+# through unmatched — not `-r`/`--requirement` (recognized), not `-c`/
+# `--constraint` (recognized), not `-e`/`--` (recognized), and not a plain
+# name (`_REQ_LINE_RE` needs a leading alnum char, but the line still starts
+# with `-`) — so the whole line was silently dropped and the nested file's
+# dependencies, hallucinated or not, were never checked at all: the same
+# silent false-all-clear shape as every other unhandled-directive gap this
+# module has already fixed, just for a separator variant instead of a
+# missing directive.
+_REQ_FILE_RE = re.compile(r"^(?:-r\s*|--requirement(?:\s+|=))(?P<target>\S.*?)\s*$")
 
 # pip's constraints-file directive (`-c`/`--constraint`). Deliberately NOT
 # recursed into like `-r` above: per pip's own documentation, a name that
@@ -153,7 +178,15 @@ _REQ_FILE_RE = re.compile(r"^(?:-r|--requirement)\s+(?P<target>.+?)\s*$")
 # (flagging a name that's merely a version pin for some other project's
 # transitive dependency, never installed by this one) rather than fixing a
 # false negative, so it stays skipped.
-_CONSTRAINT_FILE_RE = re.compile(r"^(?:-c|--constraint)\s+(?P<target>.+?)\s*$")
+#
+# Accepts the same no-space/`=` separator variants as `_REQ_FILE_RE` above,
+# for the same live-verified reason (real pip's `-cbase.txt`/
+# `--constraint=base.txt` both resolve identically to the spaced form) —
+# kept symmetric so a concatenated/`=`-form constraints directive is
+# recognized and skipped explicitly, the same as the spaced form, rather
+# than happening to be dropped for the unrelated reason that it doesn't
+# match `_REQ_LINE_RE` either.
+_CONSTRAINT_FILE_RE = re.compile(r"^(?:-c\s*|--constraint(?:\s+|=))(?P<target>\S.*?)\s*$")
 
 
 def parse_requirements_txt(path: Path) -> list[Dependency]:
