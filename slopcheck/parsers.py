@@ -1042,6 +1042,16 @@ _NPM_ALIAS_PREFIX = "npm:"
 
 _NPM_PATCH_PREFIX = "patch:"
 
+# npm-package-arg's own `isFilespec` regex is ASCII-only (`[a-zA-Z]:`, not a
+# Unicode letter class) even on non-Windows platforms — confirmed by reading
+# its source directly (see `_npm_looks_like_hosted_git_or_path`'s docstring).
+# A non-ASCII "letter" (e.g. "é:foo") doesn't match it (nor npm's other
+# protocol-sniffing regexes, all similarly `[a-z]`-only), so it falls through
+# to a real registry lookup in actual npm — `str.isalpha()` would wrongly
+# return True for it and over-match, so this is spelled as an explicit ASCII
+# class instead.
+_NPM_DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:")
+
 
 def _npm_looks_like_hosted_git_or_path(version: str) -> bool:
     """Whether an npm dependency's version value is a git-host shorthand or local path, not a registry range.
@@ -1118,10 +1128,35 @@ def _npm_looks_like_hosted_git_or_path(version: str) -> bool:
     checking — trading the git-shorthand false positive this function
     exists to fix for a new false negative on an equally real, current
     Yarn Berry pattern.
+
+    The `.`/`..` fix above quoted `isFilespec`'s full regex
+    (`/^(?:[.]|~[/]|[/]|[a-zA-Z]:)/`) but only ever ported its first
+    alternative (`[.]`) — the last one, a bare drive-letter prefix
+    (`[a-zA-Z]:`), was left uncovered even though it's the exact same
+    regex, checked by the exact same `resolve()` call, before npm ever
+    reaches the `HostedGit`/`isURL`/slash fallback this function otherwise
+    models. It matches unconditionally, on every platform: `hasSlashes` is
+    OS-gated in npm-package-arg's own source (backslash counts as a
+    separator only on Windows), but `isFilespec`'s `[a-zA-Z]:` alternative
+    is not — confirmed live on this box (Linux, real npm 9.2.0, `npm
+    install --dry-run --loglevel silly`) that a fake dependency under
+    `"totally-hallucinated-name-xyz-123": "C:\\Users\\dev\\local-lib"`
+    (a real, plausible shape: a Windows developer's local-path override,
+    committed as-is and later scanned by slopcheck on Linux CI) made npm
+    attempt to `open('/C:/Users/dev/local-lib/package.json')` and fail with
+    `ENOENT` — never a single request to `registry.npmjs.org` for that
+    name. Same result for a lowercase drive letter with no backslash at
+    all (`"c:foo"` -> `open('/tmp/.../c:foo/package.json')`), confirming
+    it's the bare `<letter>:` prefix that triggers it, not the backslashes
+    or the specific drive letter. Before this fix, `_npm_non_registry_version
+    ("C:\\Users\\dev\\local-lib")` returned `False` (no `/`, doesn't start
+    with `.`), so slopcheck sent the name to the public registry and
+    reported a real, resolvable (if broken on this platform) local
+    reference as a plain `NOT FOUND` hallucination.
     """
     if version.startswith(_NPM_PATCH_PREFIX):
         return False
-    return "/" in version or version.startswith(".")
+    return "/" in version or version.startswith(".") or bool(_NPM_DRIVE_LETTER_RE.match(version))
 
 
 def _npm_non_registry_version(version: str) -> bool:

@@ -298,6 +298,70 @@ def test_parse_package_json_skips_bare_dot_local_path(tmp_path: Path):
     assert names == {"react"}
 
 
+def test_parse_package_json_skips_windows_drive_letter_local_path(tmp_path: Path):
+    # `isFilespec`'s regex (`/^(?:[.]|~[/]|[/]|[a-zA-Z]:)/`, quoted in full in
+    # the "." fix's own docstring above) has a *fourth* alternative besides
+    # the leading-dot one that fix ported: a bare drive-letter prefix
+    # (`[a-zA-Z]:`). It matches unconditionally on every platform -- unlike
+    # npm-package-arg's `hasSlashes` (backslash only counts as a separator on
+    # Windows), `isFilespec` has no such OS gate. Confirmed live (Linux, real
+    # npm 9.2.0, `npm install --dry-run --loglevel silly`): a scratch
+    # package.json with `"totally-hallucinated-name-xyz-123":
+    # "C:\\Users\\dev\\local-lib"` made npm attempt
+    # `open('/C:/Users/dev/local-lib/package.json')` and fail with ENOENT --
+    # never a single request to registry.npmjs.org for that name. Same
+    # result for a lowercase, no-backslash value ("c:foo" ->
+    # open('.../c:foo/package.json')), confirming it's the bare `<letter>:`
+    # prefix that triggers it. Before this fix, slopcheck sent both names to
+    # the public npm registry and reported them "NOT FOUND" -- a false
+    # positive on a real (if broken on this platform), locally-resolved
+    # reference, the same false-positive shape as the "."/".." case just
+    # for the regex's other alternative.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "totally-hallucinated-name-xyz-123": "C:\\Users\\dev\\local-lib",
+                    "totally-hallucinated-name-xyz-456": "c:foo",
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"react"}
+
+
+def test_parse_package_json_still_checks_ambiguous_alpha_colon_version(tmp_path: Path):
+    # A two-or-more-letter prefix before the colon does NOT match
+    # `isFilespec`'s `[a-zA-Z]:` alternative (it requires exactly one letter
+    # immediately before the colon) -- confirmed live (real npm 9.2.0,
+    # `npm install --dry-run --loglevel silly` against
+    # `"...": "AB:foo"`): npm never attempted a local file open the way it
+    # does for a genuine single-letter drive prefix; it errored out via a
+    # completely different code path (`isURL`'s generic `[a-z]+:` scheme
+    # sniff -> EUNSUPPORTEDPROTOCOL for "ab:"), also never touching the
+    # registry, but that's a distinct, broader gap (any alphabetic
+    # "scheme:" prefix) outside this fix's scope. This test exists to pin
+    # down the drive-letter regex's own boundary: it must require exactly
+    # one leading letter, not any run of letters, or it would over-match
+    # and skip real dependencies unnecessarily.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "totally-hallucinated-name-xyz-789": "AB:foo",
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"totally-hallucinated-name-xyz-789", "react"}
+
+
 def test_parse_package_json_still_checks_yarn_patch_protocol_deps(tmp_path: Path):
     # Confirmed live (Yarn Berry 4.5.0, `yarn install` against a scratch
     # "patch:totally-hallucinated-name-xyz-987@npm%3A1.0.0#~/patches/fake.patch"
