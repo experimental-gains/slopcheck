@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.56
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.57
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.56
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.57
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.56
+    rev: v0.1.57
     hooks:
       - id: slopcheck
 ```
@@ -779,6 +779,34 @@ npm's `npm_config_userconfig` — including the same full case-insensitive
 matching (confirmed live the same way), and the same pre-v0.1.28 gap:
 only the exact `YARN_NPM_REGISTRY_SERVER`/`YARN_RC_FILENAME` spellings
 were recognized until that fix.
+
+Yarn Classic (v1) has a *third* private-registry mechanism, entirely
+separate from both `.npmrc` and Yarn Berry's `.yarnrc.yml`: its own
+`.yarnrc`, a plain (non-YAML) file of `key "value"` lines — exactly
+what `yarn config set registry <url>` itself writes — with a bare
+`registry "..."` line for a blanket override and a quoted
+`"@scope:registry" "..."` line for a scoped one, plus a `YARN_REGISTRY`
+env var equivalent of the blanket form (fixed in v0.1.57 — earlier
+versions had no reader for either at all). Confirmed live with real
+Yarn Classic 1.22.22: a scratch project with *only* a `.yarnrc`
+containing `registry "http://127.0.0.1:9/"` — no `.npmrc`, no
+`.yarnrc.yml` anywhere — made `yarn install --verbose` genuinely
+perform a GET against `http://127.0.0.1:9/<name>` and fail with
+`ECONNREFUSED`, never contacting `registry.yarnpkg.com` at all; the
+scoped form routed only that scope's resolution the same way, and
+`YARN_REGISTRY` (case-insensitively, the same as Yarn Berry's own env
+vars) triggered the identical blanket override with no `.yarnrc` file
+at all. The *value* must be double-quoted for Yarn Classic to honor it
+— confirmed live that an otherwise-identical unquoted `registry
+http://127.0.0.1:9/` line, and a single-quoted one, were both silently
+ignored, falling straight through to the public registry — so this
+tool only recognizes the double-quoted form real Yarn Classic itself
+actually reads. `~/.yarnrc` is merged in as a home-directory global
+config the same way as `.npmrc`/`.yarnrc.yml` (also confirmed live).
+Before this fix, a Yarn-Classic-only project routing dependencies
+through a private registry configured this way had every
+legitimately-private dependency reported as a plain `not_found`
+hallucination.
 
 Bun has its own config file too, `bunfig.toml`, entirely independent
 of `.npmrc`/`.yarnrc.yml` (fixed in v0.1.40 — earlier versions had no
