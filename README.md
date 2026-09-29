@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.58
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.59
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.58
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.59
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.58
+    rev: v0.1.59
     hooks:
       - id: slopcheck
 ```
@@ -423,6 +423,19 @@ and flagged every internal git/path/url dependency as "not found").
 A multiple-constraints list (`foo = [{version = "1.0", python = "<3.11"},
 {version = "2.0", python = ">=3.11"}]`) is still checked as long as at
 least one constraint has a real registry version.
+
+Poetry 2.0+ repurposes `[tool.poetry.dependencies]` for a project that
+declares its dependencies in PEP 621's `[project.dependencies]`: a
+same-named entry there now overrides that dependency's *source* (a
+git/path/url table, same shape as the legacy form above) instead of
+being a second, independent declaration. This override is now
+recognized too (fixed in v0.1.59 — earlier versions still checked the
+bare `[project.dependencies]` name against PyPI, ignoring the override
+entirely). Confirmed live against real Poetry 2.5.1: a `pyproject.toml`
+with `[project] dependencies = ["requests"]` plus
+`[tool.poetry.dependencies] requests = { git = "..." }` made `poetry
+lock` clone the git repo for `requests` and never once query PyPI for
+that name.
 
 uv's own source-override mechanism, `[tool.uv.sources]`, is the same
 idea with its own independent syntax (fixed in v0.1.18 — earlier
