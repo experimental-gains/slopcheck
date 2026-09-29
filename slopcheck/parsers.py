@@ -763,6 +763,71 @@ def _uv_non_registry_names(data: dict) -> set[str]:
     }
 
 
+def _poetry_non_registry_names(data: dict) -> set[str]:
+    """Names Poetry 2.0+ enriches a PEP 621 `[project.dependencies]` entry's *source* for.
+
+    Poetry 2.0 (https://python-poetry.org/blog/announcing-poetry-2.0.0/,
+    "Migration to the new project sections") made `[project.dependencies]`
+    the *primary* declaration for a Poetry-managed project, with
+    `[tool.poetry.dependencies]` now used only to attach Poetry-specific
+    metadata (a git/path/url source, in particular) onto a dependency
+    already named in `[project.dependencies]` — its own migration guide
+    gives exactly this example: `dependencies = ["poetry-core"]` in
+    `[project]` alongside `[tool.poetry.dependencies] poetry-core = {git =
+    "https://github.com/python-poetry/poetry-core.git"}`.
+
+    Confirmed by reading `poetry.core.factory.Factory._configure_package_dependencies`
+    (poetry-core, installed via a scratch `pip install poetry` — version
+    2.5.1) directly: every `[project.dependencies]`/`[project.optional-
+    dependencies]` entry is added to the main dependency group first (as a
+    plain `Dependency.create_from_pep_508` object), and *then*, if
+    `[tool.poetry.dependencies]` is present, each of its entries is added to
+    the *same* group as a separate "poetry dependency" via
+    `add_poetry_dependency`. `DependencyGroup.dependencies_for_locking` (the
+    property actually consulted during `poetry lock`/`poetry install`) then
+    merges the two lists by name: any PEP 621 entry whose name also appears
+    among the poetry-specific ones gets "enriched" with that entry's
+    constraint (a git/path/url source, in this case) instead of keeping its
+    own bare PEP 508 spec.
+
+    Live-verified against real Poetry 2.5.1 (`poetry lock -vvv`, an
+    unreachable-vs-real-repo technique like the rest of this file's private-
+    registry checks): a scratch `pyproject.toml` with `[project] dependencies
+    = ["requests"]` plus `[tool.poetry.dependencies] requests = {git =
+    "https://github.com/psf/requests.git"}` made `poetry lock` clone the git
+    repo for `requests` and never issue a single `pypi.org` request for that
+    name — `pypi.org` was hit only for `requests`' own transitive PyPI
+    dependencies (certifi, urllib3, idna, charset-normalizer), confirming the
+    git source fully replaces PyPI resolution for the overridden name itself.
+    Before this fix, `_pep621_deps` still emitted the bare `"requests"`
+    string from `[project.dependencies]`, and nothing cross-referenced
+    `[tool.poetry.dependencies]`'s own git/path/url entries against it the
+    way `_uv_non_registry_names` already does for `[tool.uv.sources]` — the
+    same "derived skip-set built for one override mechanism doesn't cover a
+    different, newer one with the identical shape" gap, so a real,
+    git-sourced dependency (using Poetry's own current, documented pattern
+    for pinning a fork/patch of a PyPI package) was checked against PyPI and
+    flagged `not_found` whenever the override name wasn't independently
+    published there too.
+
+    Reuses `_is_poetry_registry_dep` (already handles the multiple-
+    constraints list form and the git/path/url key set) rather than
+    duplicating its logic; only `[tool.poetry.dependencies]` is read here —
+    `[tool.poetry.dev-dependencies]`/`[tool.poetry.group.*.dependencies]`
+    only ever enrich the *legacy* (non-PEP-621) declaration path `_poetry_deps`
+    already reads directly, so including them here would just be inert
+    (their names never coincide with anything `_pep621_deps` emits from
+    `[project.optional-dependencies]`, which is PEP 621's own extras
+    mechanism, distinct from Poetry's dependency groups).
+    """
+    poetry = data.get("tool", {}).get("poetry", {})
+    return {
+        _normalize_name(name)
+        for name, spec in poetry.get("dependencies", {}).items()
+        if not _is_poetry_registry_dep(spec)
+    }
+
+
 def _self_referential_name(data: dict) -> set[str]:
     """The project's own PEP 503-normalized name, if declared, as a skip-set.
 
@@ -798,30 +863,37 @@ def _self_referential_name(data: dict) -> set[str]:
 
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
     # skip_names (derived from [tool.uv.sources]'s git/path/workspace/url
-    # entries and the project's own self-referential-extra name) only means
-    # something for the *regular* dependency resolver — uv/pip reading
-    # [project.dependencies]/[project.optional-dependencies]/
-    # [dependency-groups]/[tool.pdm.dev-dependencies]/[tool.poetry.*], the
-    # one thing [tool.uv.sources] actually overrides. [build-system]
-    # requires and Hatch's [tool.hatch.env]/[tool.hatch.envs.*] tables are
-    # resolved by two completely separate mechanisms that never consult
-    # [tool.uv.sources] at all: a PEP 517 isolated build environment (plain
-    # pip, with no notion of uv-specific config) and Hatch's own env
-    # manager. Confirmed live (venv + pip 25.x, this box): a pyproject.toml
-    # with `[tool.uv.sources] totally-hallucinated-buildreq-xyz-123 = {
-    # path = "./local-pkg" }` and `[build-system] requires = ["setuptools",
-    # "totally-hallucinated-buildreq-xyz-123"]` made `pip install .`
-    # genuinely try to fetch that name from PyPI while installing build
-    # dependencies and fail ("Could not find a version that satisfies the
-    # requirement ... (from versions: none)") — pip's build-isolation step
-    # never parses [tool.uv.sources]. Before this fix, both tables' output
-    # was folded into the same raw_specs list as the project-level tables
-    # and filtered through the same skip_names set, so a name that merely
-    # happened to collide with an unrelated [tool.uv.sources] entry (or the
-    # project's own name) got silently skipped here too — the same false
-    # negative _build_system_deps's/_hatch_deps's own docstrings already
-    # describe (neither participates in [tool.uv.sources] overrides), just
-    # not actually enforced by this function until now.
+    # entries, [tool.poetry.dependencies]'s equivalent git/path/url overrides
+    # of a same-named [project.dependencies] entry — see
+    # _poetry_non_registry_names — and the project's own self-referential-
+    # extra name) only means something for the *regular* dependency resolver
+    # — uv/pip/Poetry reading [project.dependencies]/[project.optional-
+    # dependencies]/[dependency-groups]/[tool.pdm.dev-dependencies]/
+    # [tool.poetry.*], the tables these two override mechanisms actually
+    # apply to. [build-system] requires and Hatch's [tool.hatch.env]/
+    # [tool.hatch.envs.*] tables are resolved by two completely separate
+    # mechanisms that never consult [tool.uv.sources] or
+    # [tool.poetry.dependencies] at all: a PEP 517 isolated build environment
+    # (plain pip, with no notion of uv/Poetry-specific config) and Hatch's
+    # own env manager. Confirmed live (venv + pip 25.x, this box): a
+    # pyproject.toml with `[tool.uv.sources] totally-hallucinated-buildreq-
+    # xyz-123 = { path = "./local-pkg" }` and `[build-system] requires =
+    # ["setuptools", "totally-hallucinated-buildreq-xyz-123"]` made `pip
+    # install .` genuinely try to fetch that name from PyPI while installing
+    # build dependencies and fail ("Could not find a version that satisfies
+    # the requirement ... (from versions: none)") — pip's build-isolation
+    # step never parses [tool.uv.sources] (and, by the same reasoning,
+    # doesn't invoke Poetry's own resolver either, so a [tool.poetry.
+    # dependencies] override of the identical name wouldn't apply to a
+    # [build-system] requires entry sharing it). Before the uv fix, both
+    # tables' output was folded into the same raw_specs list as the
+    # project-level tables and filtered through the same skip_names set, so
+    # a name that merely happened to collide with an unrelated skip-set
+    # entry (or the project's own name) got silently skipped here too — the
+    # same false negative _build_system_deps's/_hatch_deps's own docstrings
+    # already describe (neither participates in [tool.uv.sources] or
+    # [tool.poetry.dependencies] overrides), just not actually enforced by
+    # this function until now.
     data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     raw_specs = (
         _pep621_deps(data)
@@ -829,7 +901,9 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
         + _dependency_groups_deps(data)
         + _pdm_dev_deps(data)
     )
-    skip_names = _uv_non_registry_names(data) | _self_referential_name(data)
+    skip_names = (
+        _uv_non_registry_names(data) | _self_referential_name(data) | _poetry_non_registry_names(data)
+    )
     deps = []
     for spec in raw_specs:
         match = _REQ_LINE_RE.match(spec.strip())

@@ -643,6 +643,41 @@ def test_parse_pyproject_uv_sources_skips_non_registry(tmp_path: Path):
     assert names == {"requests", "mkdocs", "pytest", "torch"}
 
 
+def test_parse_pyproject_poetry2_dependencies_overrides_pep621_source(tmp_path: Path):
+    # Poetry 2.0+ (https://python-poetry.org/blog/announcing-poetry-2.0.0/)
+    # makes [project.dependencies] the primary declaration and repurposes
+    # [tool.poetry.dependencies] to attach a git/path/url source onto a
+    # same-named entry already declared there — the exact shape
+    # [tool.uv.sources] already gets special-cased for above, just for a
+    # different, newer tool mechanism this parser didn't cross-reference at
+    # all. Live-verified against real Poetry 2.5.1 (`poetry lock -vvv`): a
+    # pyproject.toml with `[project] dependencies = ["requests"]` and
+    # `[tool.poetry.dependencies] requests = {git = "..."}` made Poetry clone
+    # the git repo for "requests" and never issue a single pypi.org request
+    # for that name (pypi.org was hit only for requests' own transitive
+    # deps: certifi, urllib3, idna, charset-normalizer). Before this fix,
+    # `_pep621_deps` still emitted the bare "requests" string with nothing
+    # to skip it, so a real git-sourced dependency (Poetry's own documented
+    # pattern for pinning a fork of a PyPI package) was checked against
+    # PyPI. "mkdocs" is a plain PEP 621 entry with no [tool.poetry.
+    # dependencies] counterpart at all, confirming the override is scoped to
+    # only the name it actually names, not a blanket "any [tool.poetry.
+    # dependencies] present" skip.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests", "mkdocs"]
+
+        [tool.poetry.dependencies]
+        requests = { git = "https://example.com/requests-fork.git" }
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"mkdocs"}
+
+
 def test_parse_pyproject_poetry_legacy_dev_dependencies(tmp_path: Path):
     # Pre-1.2 Poetry used [tool.poetry.dev-dependencies] instead of a
     # [tool.poetry.group.*.dependencies] table; both forms are still seen
