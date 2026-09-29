@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.57
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.58
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.57
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.58
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.57
+    rev: v0.1.58
     hooks:
       - id: slopcheck
 ```
@@ -807,6 +807,20 @@ Before this fix, a Yarn-Classic-only project routing dependencies
 through a private registry configured this way had every
 legitimately-private dependency reported as a plain `not_found`
 hallucination.
+
+That `~/.yarnrc` global fallback wasn't quite right either (fixed in
+v0.1.58): real Yarn Classic deliberately relocates its *global*
+config-home directory away from the actual home directory whenever
+it's running as root — confirmed by reading the real, installed
+1.22.22 npm package's own bundled source — using `/usr/local/share`
+instead (a `fakeroot(1)`-aware check, so a `fakeroot`-wrapped process
+still gets the real home). Confirmed live running actual Yarn Classic
+1.22.22 as root: a blanket `registry "..."` placed *only* in
+`/usr/local/share/.yarnrc` — no project `.yarnrc`, no `$HOME/.yarnrc`
+at all — was genuinely honored by a real `yarn install`. Since root is
+an extremely common way to run both real installs (Docker/CI base
+images) and slopcheck itself, `~/.yarnrc` alone silently missed this
+global config before this fix.
 
 Bun has its own config file too, `bunfig.toml`, entirely independent
 of `.npmrc`/`.yarnrc.yml` (fixed in v0.1.40 — earlier versions had no
