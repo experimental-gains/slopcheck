@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.61
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.62
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.61
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.62
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.61
+    rev: v0.1.62
     hooks:
       - id: slopcheck
 ```
@@ -332,6 +332,23 @@ path): the wrapped descriptor is still a real registry reference
 queries the registry for the named key before applying the patch —
 confirmed live (Yarn Berry 4.5.0) with a real 404 from
 `registry.yarnpkg.com` for a fake name inside a `patch:` spec.
+
+A version value starting with a literal `.` — a bare `"."` or `".."`,
+not just a multi-segment path like `"../foo"` (already caught by the
+`/`-based check above) — is now also recognized as a local-path
+reference (fixed in v0.1.62). npm-package-arg's own resolver checks
+this (`isFilespec`, matching any value starting with `.`, `~/`, `/`, or
+a drive letter) *before* it ever falls through to the git-host/slash
+fallback above, so a bare `.`/`..` resolves locally even with no `/`
+anywhere in it. Confirmed live end-to-end (npm 9.15.0, real `npm
+install`, no `--dry-run`): a scratch `package.json` with
+`"totally-hallucinated-selfref-xyz-987": "."` in `devDependencies`
+installed cleanly — `node_modules/totally-hallucinated-selfref-xyz-987`
+created, pointing back at the project's own directory — with zero
+requests to `registry.npmjs.org` for that name anywhere in a full
+`--loglevel silly` trace. Before this fix, slopcheck sent this name to
+the public npm registry and reported it "NOT FOUND" — a false positive
+on a dependency a real `npm install` resolves entirely locally.
 
 `npm:` aliases (`"my-name": "npm:real-package@1.2.3"`, used to depend on
 a package under a local rename or alongside another version of itself)
