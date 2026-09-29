@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.59
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.60
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.59
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.60
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.59
+    rev: v0.1.60
     hooks:
       - id: slopcheck
 ```
@@ -493,6 +493,27 @@ exists for: a brand-new, not-yet-published project using its own
 umbrella extra while still in early development. The project's own name
 is matched case/separator-insensitively (PEP 503), the same rule
 `[project.name]` itself is normalized under.
+
+`setup.cfg`'s own `[options.extras_require]` gets the identical
+self-referential-extra treatment now too (fixed in v0.1.60) — the
+pattern above isn't specific to PEP 621 syntax, it's a property of how
+pip resolves a self-named `Requires-Dist` against the package already
+being installed. Confirmed live (setuptools 84.0.0, real pip 25.x): a
+from-scratch `setup.cfg`-only project (`[metadata] name =
+totally-hallucinated-selfref-test-xyz-123`, `[options.extras_require]
+all = totally-hallucinated-selfref-test-xyz-123[gui]`, `gui = pillow`,
+no PEP 621 `[project]` table at all) had `pip install --dry-run -v
+".[all]"` resolve the `all`/`gui` extras and install `pillow` without
+ever issuing a single request for
+`totally-hallucinated-selfref-test-xyz-123` itself. Before this fix,
+`parse_setup_cfg` had no skip-set at all for this — unlike
+`parse_pyproject_toml` — so a real `slopcheck` run against that same
+project flagged it "NOT FOUND (no such project on PyPI)": a false
+positive on a not-yet-published `setup.cfg`-based project using this
+real, current pattern. Matched PEP 503-normalized, same as above;
+`[options] setup_requires` is deliberately unaffected, since it
+installs into an isolated build environment before the package's own
+metadata/extras exist at all.
 
 A `requirements.txt` line starting with `-r`/`--requirement` (pip's
 nested-requirements-file directive, resolved relative to the file that
