@@ -765,6 +765,7 @@ def _clear_registry_env(monkeypatch):
         "NPM_CONFIG_REGISTRY",
         "YARN_NPM_REGISTRY_SERVER",
         "YARN_RC_FILENAME",
+        "YARN_REGISTRY",
         "BUN_CONFIG_REGISTRY",
     ):
         monkeypatch.delenv(var, raising=False)
@@ -940,6 +941,114 @@ def test_yarnrc_ignores_nested_key_that_is_not_npm_registry_server(tmp_path: Pat
 
 
 def test_yarnrc_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == set()
+
+
+def test_yarn_classic_rc_blanket_registry(tmp_path: Path, monkeypatch):
+    """Yarn Classic (v1) has a *third* independent registry config file of
+    its own, `.yarnrc` — plain `key "value"` lines, not the YAML
+    `.yarnrc.yml` Yarn Berry reads, and entirely separate from `.npmrc` too.
+    Confirmed live (Yarn Classic 1.22.22, `yarn install --verbose` against a
+    scratch project with *only* a `.yarnrc` containing
+    `registry "http://127.0.0.1:9/"` — no `.npmrc`, no `.yarnrc.yml`
+    anywhere): the resolver genuinely performed a GET against
+    `http://127.0.0.1:9/<name>` and failed with ECONNREFUSED, never
+    contacting `registry.yarnpkg.com` at all. Before this fix, `.yarnrc`
+    (Yarn Classic's own format) had no reader at all, so a Yarn-Classic
+    project routing every dependency through a private registry this way
+    had every genuinely-resolvable private dependency reported as a plain
+    `not_found` hallucination."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".yarnrc").write_text('registry "https://npm.internal.example/"\n')
+
+    blanket, _scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is True
+
+
+def test_yarn_classic_rc_scope_registry(tmp_path: Path, monkeypatch):
+    """Same gap, scoped form: confirmed live (Yarn Classic 1.22.22) that
+    `"@acmecorp:registry" "http://127.0.0.1:9/"` in `.yarnrc` genuinely
+    routed resolution of an `@acmecorp/`-scoped dependency at that address
+    (a real GET to `http://127.0.0.1:9/@acmecorp%2f<name>`, ECONNREFUSED,
+    not a 404 from the public registry) — an unscoped dependency in the same
+    project is unaffected, same as every other scope mapping this file
+    already handles."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".yarnrc").write_text('"@acmecorp:registry" "https://npm.internal.example/"\n')
+
+    blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_yarn_classic_rc_unquoted_value_not_honored(tmp_path: Path, monkeypatch):
+    """The mirror image of the above: confirmed live that real Yarn Classic
+    itself silently ignores an unquoted `.yarnrc` value (it fell straight
+    through to the public registry, no connection attempt at the named
+    address at all) — so this parser must not treat that shape as a
+    private-registry signal either, or it would wrongly downgrade a real
+    hallucination in an otherwise-ordinary project to `private` and swallow
+    it."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    (tmp_path / ".yarnrc").write_text("registry https://npm.internal.example/\n")
+
+    blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == set()
+
+
+def test_yarn_classic_registry_env_var_triggers_blanket(tmp_path: Path, monkeypatch):
+    """`YARN_REGISTRY` is Yarn Classic's own env var equivalent of the
+    blanket `.yarnrc` form — confirmed live (real `yarn install`, no
+    `.yarnrc` at all) that it's genuinely honored, case-insensitively the
+    same way `npm_config_registry`/`YARN_NPM_REGISTRY_SERVER` already are
+    (a mixed-case `Yarn_Registry` spelling was confirmed live too)."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setenv("Yarn_Registry", "https://npm.internal.example/")
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+
+    blanket, _scopes = npm_private_registry_context([])
+
+    assert blanket is True
+
+
+def test_yarn_classic_rc_home_global_config_is_read(tmp_path: Path, monkeypatch):
+    """Yarn Classic merges a home-directory `~/.yarnrc` in as a global
+    config too, the same project+global split every other config reader in
+    this file already has — confirmed live: a blanket `registry "..."`
+    placed only there (no project-level `.yarnrc` at all) was genuinely
+    honored by a real `yarn install`."""
+    _clear_registry_env(monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".yarnrc").write_text('registry "https://npm.internal.example/"\n')
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    blanket, _scopes = npm_private_registry_context([project_root])
+
+    assert blanket is True
+
+
+def test_yarn_classic_rc_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
     _clear_registry_env(monkeypatch)
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "empty-home").mkdir()
