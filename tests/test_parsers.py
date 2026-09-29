@@ -480,6 +480,31 @@ def test_parse_package_json_yarn_resolution_wildcard_edge_cases(tmp_path: Path):
     assert names == {"webpack", "@babel/core"}
 
 
+def test_parse_package_json_resolves_npm_alias_in_yarn_resolution_value(tmp_path: Path):
+    # Confirmed live (Yarn Classic 1.22.22): a resolutions entry whose
+    # *value* is an "npm:" alias substitutes a different real package for
+    # the one the pattern's key names — `yarn install` genuinely queries the
+    # registry for the alias target, not the key-derived name. Before this
+    # fix, only the key was ever read, so an aliased entry like this one
+    # checked "is-number" (a real, unrelated package) and never the actual
+    # hallucinated name Yarn tries to fetch.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {"is-odd": "^3.0.1"},
+                "resolutions": {
+                    "is-odd/**/is-number": "npm:totally-hallucinated-slopcheck-test-xyz-42@1.0.0",
+                    "graceful-fs": "^4.2.11",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"is-odd", "totally-hallucinated-slopcheck-test-xyz-42", "graceful-fs"}
+    assert "is-number" not in names
+
+
 def test_parse_pyproject_pep621(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(

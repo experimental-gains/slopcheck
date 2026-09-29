@@ -1144,8 +1144,30 @@ def parse_package_json(path: Path) -> list[Dependency]:
     if isinstance(pnpm_overrides, dict):
         for name in _npm_overrides_deps(pnpm_overrides.get("overrides", {})):
             deps.append(Dependency(name, "npm", str(path)))
-    for pattern in data.get("resolutions", {}):
-        deps.append(Dependency(_yarn_resolution_target(pattern), "npm", str(path)))
+    # A resolutions entry's value can itself be an `npm:` alias — the same
+    # aliasing syntax `dependencies`/`overrides` already resolve above —
+    # substituting a *different* real package for the one the pattern's key
+    # names. Before this fix, only the key (via `_yarn_resolution_target`)
+    # was ever inspected; the value was never read at all, so an aliased
+    # resolutions entry checked the wrong name entirely. Confirmed live
+    # (Yarn Classic 1.22.22, `yarn install` against a scratch package.json
+    # with `"resolutions": {"is-odd/**/is-number": "npm:totally-
+    # hallucinated-slopcheck-test-xyz-42@1.0.0"}`): Yarn genuinely queried
+    # `https://registry.yarnpkg.com/totally-hallucinated-slopcheck-test-
+    # xyz-42` (a real npm registry mirror) and failed the install with a
+    # real 404 for the hallucinated alias target — not for `is-number`, the
+    # name the pre-fix code checked instead. A `patch:`-wrapped value (the
+    # jest.js-derived shape `test_parse_package_json_strips_range_from_
+    # yarn_resolution_key` already covers) is deliberately left to the
+    # existing key-based path: unlike a bare `npm:` alias, its wrapped
+    # target already matched the key's own name in every real example found
+    # (jest's own package.json), so there's no live-verified case yet where
+    # unwrapping it further would change which name gets checked.
+    for pattern, value in data.get("resolutions", {}).items():
+        if isinstance(value, str) and value.startswith(_NPM_ALIAS_PREFIX):
+            deps.append(Dependency(_npm_alias_target(value), "npm", str(path)))
+        else:
+            deps.append(Dependency(_yarn_resolution_target(pattern), "npm", str(path)))
     return deps
 
 
