@@ -405,6 +405,30 @@ _YARN_CLASSIC_RC_LINE_RE = re.compile(r'^(?:"(?P<quoted_key>[^"]+)"|(?P<bare_key
 _YARN_CLASSIC_RC_SCOPE_KEY_RE = re.compile(r"^(@[^:\s]+):registry$")
 
 
+def _yarn_classic_config_home() -> Path:
+    # Yarn Classic (v1) deliberately relocates its *global* config-home
+    # directory away from the real home directory when running as root —
+    # confirmed by reading the actual `yarn` 1.22.22 npm package's bundled
+    # `cli.js` directly (the `root-user`/`user-home` helper modules it
+    # ships): `isRootUser(process.getuid()) && !isFakeRoot() ?
+    # path.resolve('/usr/local/share') : os.homedir()` (`isFakeRoot` only
+    # checks a `FAKEROOTKEY` env var, a `fakeroot(1)` escape hatch), and
+    # this relocated path — not `$HOME` — is what every global `.yarnrc`
+    # lookup (`homeConfigLoc`) is actually built from. Confirmed live
+    # running real Yarn Classic 1.22.22 as root (`process.getuid() === 0`,
+    # no `FAKEROOTKEY`): a blanket `registry "..."` entry placed *only* in
+    # `/usr/local/share/.yarnrc` — no project-level `.yarnrc`, no
+    # `$HOME/.yarnrc` at all — was genuinely honored by a real
+    # `yarn install --verbose` (a GET to the configured address,
+    # ECONNREFUSED, never touching `registry.yarnpkg.com`). Root is an
+    # extremely common way to run both real installs (Docker/CI base
+    # images) and slopcheck itself, so `Path.home()` alone silently missed
+    # this for the majority of containerized real-world runs.
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and not os.environ.get("FAKEROOTKEY"):
+        return Path("/usr/local/share")
+    return Path.home()
+
+
 def _yarn_classic_rc_paths(project_roots: list[Path]) -> list[Path]:
     # Yarn Classic (v1) has a *third* independent registry-config file,
     # distinct from both `.npmrc` (`_npmrc_paths` above) and Yarn Berry's
@@ -415,12 +439,14 @@ def _yarn_classic_rc_paths(project_roots: list[Path]) -> list[Path]:
     # made `yarn install --verbose` genuinely perform a GET against
     # `http://127.0.0.1:9/<name>` and fail with ECONNREFUSED, never
     # contacting `registry.yarnpkg.com` at all. Read from the project root
-    # and merged with a home-directory global one, the same project+global
-    # split `_npmrc_paths`/`_yarnrc_paths` already use — confirmed live too:
-    # a blanket `registry "..."` placed only in `~/.yarnrc`, with no
+    # and merged with a global one, the same project+global split
+    # `_npmrc_paths`/`_yarnrc_paths` already use — confirmed live too: a
+    # blanket `registry "..."` placed only in the global file, with no
     # project-level `.yarnrc` at all, was genuinely honored the same way.
+    # The global file's own location isn't always `~/.yarnrc` — see
+    # `_yarn_classic_config_home`.
     paths = [root / ".yarnrc" for root in project_roots]
-    paths.append(Path.home() / ".yarnrc")
+    paths.append(_yarn_classic_config_home() / ".yarnrc")
     return paths
 
 

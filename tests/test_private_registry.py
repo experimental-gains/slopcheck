@@ -966,6 +966,7 @@ def test_yarn_classic_rc_blanket_registry(tmp_path: Path, monkeypatch):
     had every genuinely-resolvable private dependency reported as a plain
     `not_found` hallucination."""
     _clear_registry_env(monkeypatch)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 1000, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "empty-home").mkdir()
     (tmp_path / ".yarnrc").write_text('registry "https://npm.internal.example/"\n')
@@ -984,6 +985,7 @@ def test_yarn_classic_rc_scope_registry(tmp_path: Path, monkeypatch):
     project is unaffected, same as every other scope mapping this file
     already handles."""
     _clear_registry_env(monkeypatch)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 1000, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "empty-home").mkdir()
     (tmp_path / ".yarnrc").write_text('"@acmecorp:registry" "https://npm.internal.example/"\n')
@@ -1003,6 +1005,7 @@ def test_yarn_classic_rc_unquoted_value_not_honored(tmp_path: Path, monkeypatch)
     hallucination in an otherwise-ordinary project to `private` and swallow
     it."""
     _clear_registry_env(monkeypatch)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 1000, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "empty-home").mkdir()
     (tmp_path / ".yarnrc").write_text("registry https://npm.internal.example/\n")
@@ -1034,8 +1037,13 @@ def test_yarn_classic_rc_home_global_config_is_read(tmp_path: Path, monkeypatch)
     config too, the same project+global split every other config reader in
     this file already has — confirmed live: a blanket `registry "..."`
     placed only there (no project-level `.yarnrc` at all) was genuinely
-    honored by a real `yarn install`."""
+    honored by a real `yarn install`. This is the non-root case
+    specifically (real Yarn only uses `$HOME` when not running as root —
+    see `test_yarn_classic_config_home_relocates_for_root` below), so uid 0
+    is pinned to a non-root value to make this test hermetic regardless of
+    the actual user running the test suite."""
     _clear_registry_env(monkeypatch)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 1000, raising=False)
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -1050,6 +1058,7 @@ def test_yarn_classic_rc_home_global_config_is_read(tmp_path: Path, monkeypatch)
 
 def test_yarn_classic_rc_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
     _clear_registry_env(monkeypatch)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 1000, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "empty-home").mkdir()
 
@@ -1057,6 +1066,49 @@ def test_yarn_classic_rc_missing_file_is_not_an_error(tmp_path: Path, monkeypatc
 
     assert blanket is False
     assert scopes == set()
+
+
+def test_yarn_classic_config_home_uses_home_when_not_root(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("FAKEROOTKEY", raising=False)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert private_registry._yarn_classic_rc_paths([]) == [tmp_path / ".yarnrc"]
+
+
+def test_yarn_classic_config_home_relocates_for_root(tmp_path: Path, monkeypatch):
+    """Real Yarn Classic (v1) deliberately avoids writing its *global*
+    config under root's actual home directory — confirmed by reading the
+    real, installed 1.22.22 npm package's bundled `cli.js` directly: its
+    `root-user`/`user-home` helper modules resolve the config-home
+    directory as `isRootUser(process.getuid()) && !isFakeRoot() ?
+    path.resolve('/usr/local/share') : os.homedir()`. Confirmed live too:
+    running actual Yarn Classic 1.22.22 as root (`process.getuid() === 0`,
+    no `FAKEROOTKEY`), a blanket `registry "..."` placed *only* in
+    `/usr/local/share/.yarnrc` — no project `.yarnrc`, no `$HOME/.yarnrc`
+    at all — was genuinely honored by a real `yarn install --verbose` (a
+    GET to the configured address, ECONNREFUSED, never touching
+    `registry.yarnpkg.com`). Root is an extremely common way to run both
+    real installs (Docker/CI base images) and slopcheck itself, so
+    `Path.home()` alone silently missed this before this fix."""
+    monkeypatch.delenv("FAKEROOTKEY", raising=False)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert private_registry._yarn_classic_rc_paths([]) == [Path("/usr/local/share") / ".yarnrc"]
+
+
+def test_yarn_classic_config_home_fakeroot_keeps_real_home(tmp_path: Path, monkeypatch):
+    """`fakeroot(1)` is real Yarn's own documented escape hatch from the
+    root relocation above (`isFakeRoot()` in the same source, gated on a
+    `FAKEROOTKEY` env var `fakeroot` itself sets) — a `fakeroot`-wrapped
+    process still reports uid 0 via `process.getuid()` but real Yarn
+    deliberately treats it as an ordinary, non-relocated user."""
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKEROOTKEY", "1234")
+
+    assert private_registry._yarn_classic_rc_paths([]) == [tmp_path / ".yarnrc"]
 
 
 def test_bunfig_scope_registry(tmp_path: Path, monkeypatch):
