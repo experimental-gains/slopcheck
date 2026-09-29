@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.62
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.63
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.62
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.63
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.62
+    rev: v0.1.63
     hooks:
       - id: slopcheck
 ```
@@ -336,7 +336,7 @@ confirmed live (Yarn Berry 4.5.0) with a real 404 from
 A version value starting with a literal `.` — a bare `"."` or `".."`,
 not just a multi-segment path like `"../foo"` (already caught by the
 `/`-based check above) — is now also recognized as a local-path
-reference (fixed in v0.1.62). npm-package-arg's own resolver checks
+reference (fixed in v0.1.63). npm-package-arg's own resolver checks
 this (`isFilespec`, matching any value starting with `.`, `~/`, `/`, or
 a drive letter) *before* it ever falls through to the git-host/slash
 fallback above, so a bare `.`/`..` resolves locally even with no `/`
@@ -349,6 +349,21 @@ requests to `registry.npmjs.org` for that name anywhere in a full
 `--loglevel silly` trace. Before this fix, slopcheck sent this name to
 the public npm registry and reported it "NOT FOUND" — a false positive
 on a dependency a real `npm install` resolves entirely locally.
+
+`isFilespec`'s last alternative — a bare drive-letter prefix like
+`"C:\Users\dev\local-lib"` or `"c:foo"` — is now recognized too (fixed
+in v0.1.63). It matches unconditionally on every platform, not just
+Windows: confirmed live (Linux, real npm 9.2.0) that a scratch
+`package.json` dependency on `"C:\Users\dev\local-lib"` made npm
+attempt to open `/C:/Users/dev/local-lib/package.json` and fail with
+`ENOENT` — never a single request to `registry.npmjs.org` — the same
+result for a lowercase, no-backslash `"c:foo"`. A two-letter prefix
+like `"AB:foo"` does *not* match (confirmed live: npm takes a different,
+still non-registry `EUNSUPPORTEDPROTOCOL` path for that one instead),
+so the check requires exactly one leading ASCII letter before the
+colon. Before this fix, slopcheck sent a Windows local-path override
+committed as-is to the public npm registry and reported it "NOT
+FOUND".
 
 `npm:` aliases (`"my-name": "npm:real-package@1.2.3"`, used to depend on
 a package under a local rename or alongside another version of itself)
