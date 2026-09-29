@@ -142,6 +142,21 @@ either (no leading package-name character) — the dependency never got
 checked, and slopcheck reported a clean scan for a file a real `pip
 install -r` would genuinely fail on.
 
+A Pipfile `[packages]`/`[dev-packages]` entry sourced via Pipenv's
+`svn`/`hg`/`bzr` table keys is now correctly skipped as non-registry,
+the same as the already-handled `git`/`path`/`file` keys (fixed in
+v0.1.56). Pipenv's own `VCS_LIST` constant is `("git", "svn", "hg",
+"bzr")`, and its schema accepts all four as equally valid dependency-
+spec keys — confirmed live (Pipenv 2026.8.0): `pipenv lock -v` against
+`totally-hallucinated-svn-test-xyz-123 = { svn =
+"svn://127.0.0.1:9/repo" }` genuinely dispatched to pip's own
+Subversion VCS backend and never queried PyPI for that name at all.
+Before this fix, only `git`/`path`/`file` opted a Pipfile entry out of
+the registry check, so an `svn`/`hg`/`bzr`-sourced dependency — a real,
+still-current Pipenv feature — was sent to PyPI and reported as a
+plain `not_found` hallucination unless the name happened to be
+independently published there.
+
 ## If you hit "Could not find a version that satisfies the requirement" or npm's "404 Not Found"
 
 Those are pip's and npm's own errors for exactly this situation — a
@@ -189,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.55
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.56
 ```
 
 ## Usage
@@ -215,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.55
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.56
     slopcheck
 ```
 
@@ -224,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.55
+    rev: v0.1.56
     hooks:
       - id: slopcheck
 ```
