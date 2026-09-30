@@ -1409,34 +1409,153 @@ def npm_workspace_member_names(package_json_paths: list[Path]) -> list[tuple[Pat
         patterns = _npm_workspace_patterns(data)
         if not patterns:
             continue
-        root = path.parent
-        names: set[str] = set()
-        for pattern in patterns:
-            # A leading "!" negates a pattern (excludes matches an earlier,
-            # broader pattern already matched) -- not modeled here; treating
-            # a negated pattern's matches the same as any other only risks
-            # the same safe over-approximation this module already accepts
-            # elsewhere (e.g. `uv_private_registry_context`'s docstring:
-            # wrongly skipping a name beats wrongly flagging a real local
-            # package as a hallucination).
-            glob_pattern = pattern[1:] if pattern.startswith("!") else pattern
-            try:
-                matches = list(root.glob(glob_pattern))
-            except (ValueError, NotImplementedError):
-                continue
-            for member_dir in matches:
-                member_pkg = member_dir / "package.json"
-                if not member_pkg.is_file():
-                    continue
-                try:
-                    member_data = json.loads(member_pkg.read_text(encoding="utf-8-sig"))
-                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-                name = member_data.get("name")
-                if isinstance(name, str):
-                    names.add(name)
+        names = _workspace_member_names_from_patterns(path.parent, patterns)
         if names:
-            pairs.append((root, names))
+            pairs.append((path.parent, names))
+    return pairs
+
+
+def _workspace_member_names_from_patterns(root: Path, patterns: list[str]) -> set[str]:
+    """Resolve a list of workspace glob patterns (rooted at `root`) to the declared `name` of each matching member.
+
+    Shared by `npm_workspace_member_names` (patterns come from a
+    package.json's own `workspaces` field, matched relative to that same
+    file's directory) and `pnpm_workspace_member_names` (patterns come from
+    a sibling `pnpm-workspace.yaml`'s `packages:` list, matched relative to
+    *its* directory) — both ultimately reduce to "glob this pattern, read
+    each match's own package.json `name`," just sourced from a different
+    file for pnpm.
+    """
+    names: set[str] = set()
+    for pattern in patterns:
+        # A leading "!" negates a pattern (excludes matches an earlier,
+        # broader pattern already matched) -- not modeled here; treating
+        # a negated pattern's matches the same as any other only risks
+        # the same safe over-approximation this module already accepts
+        # elsewhere (e.g. `uv_private_registry_context`'s docstring:
+        # wrongly skipping a name beats wrongly flagging a real local
+        # package as a hallucination).
+        glob_pattern = pattern[1:] if pattern.startswith("!") else pattern
+        try:
+            matches = list(root.glob(glob_pattern))
+        except (ValueError, NotImplementedError):
+            continue
+        for member_dir in matches:
+            member_pkg = member_dir / "package.json"
+            if not member_pkg.is_file():
+                continue
+            try:
+                member_data = json.loads(member_pkg.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            name = member_data.get("name")
+            if isinstance(name, str):
+                names.add(name)
+    return names
+
+
+_PNPM_WORKSPACE_TOP_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+):\s*(.*)$")
+_PNPM_WORKSPACE_LIST_ITEM_RE = re.compile(r"^-\s*(.*)$")
+
+
+def _pnpm_workspace_patterns(text: str) -> list[str]:
+    """Extract glob patterns from a `pnpm-workspace.yaml`'s top-level `packages:` block-sequence list.
+
+    pnpm workspaces (https://pnpm.io/workspaces) are declared entirely
+    differently from npm's/Yarn Classic's `package.json` `workspaces` field
+    (`_npm_workspace_patterns` above): pnpm requires a *separate* file,
+    `pnpm-workspace.yaml`, at the workspace root, with its own `packages:`
+    key listing the same kind of glob patterns
+    (`packages:\\n  - 'packages/*'`) — pnpm does not read `package.json`'s
+    `workspaces` field at all. Not a general YAML parser, the same "hand-
+    parse the subset of syntax that matters" approach already used for
+    Yarn Berry's own YAML `.yarnrc.yml` (`_parse_yarnrc_registries`): a real
+    `pnpm-workspace.yaml`'s `packages:` value is always a plain block
+    sequence of quoted or bare glob strings, confirmed against pnpm's own
+    generated file (`pnpm init`) and its docs' own examples. Flow-style
+    (`packages: ['packages/*']`) is a known gap, not worth the added
+    complexity for a form pnpm's own tooling never generates, mirroring
+    `_parse_yarnrc_registries`'s identical documented gap for `.yarnrc.yml`.
+    """
+    patterns: list[str] = []
+    in_packages = False
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent == 0:
+            top_match = _PNPM_WORKSPACE_TOP_KEY_RE.match(stripped)
+            in_packages = bool(top_match) and top_match.group(1) == "packages" and not top_match.group(2)
+            continue
+        if not in_packages:
+            continue
+        item_match = _PNPM_WORKSPACE_LIST_ITEM_RE.match(stripped)
+        if item_match:
+            item = item_match.group(1).strip().strip("\"'")
+            if item:
+                patterns.append(item)
+    return patterns
+
+
+def pnpm_workspace_member_names(pnpm_workspace_paths: list[Path]) -> list[tuple[Path, set[str]]]:
+    """For every `pnpm-workspace.yaml` found, the local package names it resolves without the registry.
+
+    The pnpm analog of `npm_workspace_member_names` above, for pnpm's own
+    independent workspace-declaration mechanism (a sibling
+    `pnpm-workspace.yaml`, not `package.json`'s `workspaces` field — see
+    `_pnpm_workspace_patterns`). Unlike npm/Yarn Classic, where an ordinary
+    semver-range dependency on a workspace sibling resolves locally
+    *unconditionally*, pnpm's default (`link-workspace-packages` unset,
+    which defaults to `false`) actually sends such a dependency to the
+    registry and fails it exactly like slopcheck already reports it —
+    confirmed live (pnpm 9.15.0, a from-scratch two-package pnpm workspace:
+    root `package.json` `devDependencies: {"totally-hallucinated-pnpm-
+    workspace-xyz-123": "^1.0.0"}`, `pnpm-workspace.yaml` `packages: -
+    'packages/*'`, member `packages/internal-lib/package.json` `name:
+    "totally-hallucinated-pnpm-workspace-xyz-123", private: true`): a plain
+    `pnpm install` genuinely issued `GET https://registry.npmjs.org/
+    totally-hallucinated-pnpm-workspace-xyz-123` and failed with a real
+    404 — matching slopcheck's own `not_found` verdict for that shape.
+
+    Setting `link-workspace-packages=true` in `.npmrc` (a real, current,
+    documented pnpm setting: https://pnpm.io/settings#linkworkspacepackages
+    — the *default* before pnpm 8, so still commonly carried over into
+    older or migrated monorepos' checked-in `.npmrc`) changes this:
+    confirmed live, the identical scan with only that one line added to a
+    root `.npmrc` made the same `pnpm install` resolve the dependency
+    entirely locally (symlinked into `node_modules`, "Already up to date",
+    zero registry requests for that name) instead. Whether that setting is
+    present isn't threaded through here, the same safe-over-approximation
+    choice `npm_workspace_member_names`'s own docstring already makes for
+    a mismatched-but-still-locally-resolved version range: a name that is
+    a real pnpm workspace member's own declared name is essentially never
+    going to *also* be an independently-hallucinated name some other
+    manifest in the same scan invents, so unconditionally treating it as
+    local-only costs little detection power while fixing the real,
+    live-verified false positive for any pnpm monorepo that does have the
+    setting on. Before this fix, `scan()` had no notion of
+    `pnpm-workspace.yaml` at all, so a pnpm monorepo using this real,
+    documented setting had every private, unpublished workspace member
+    referenced with a plain semver range reported as a plain `not_found`
+    hallucination — the exact failure shape `npm_workspace_member_names`
+    already fixed for npm/Yarn Classic, just for pnpm's own, differently-
+    shaped workspace-declaration file.
+    """
+    pairs: list[tuple[Path, set[str]]] = []
+    for path in pnpm_workspace_paths:
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        patterns = _pnpm_workspace_patterns(text)
+        if not patterns:
+            continue
+        names = _workspace_member_names_from_patterns(path.parent, patterns)
+        if names:
+            pairs.append((path.parent, names))
     return pairs
 
 
@@ -1492,12 +1611,25 @@ def parse_package_json(path: Path) -> list[Dependency]:
     return deps
 
 
+def _parse_pnpm_workspace_yaml(path: Path) -> list[Dependency]:
+    """`pnpm-workspace.yaml` declares no dependencies of its own -- it's a
+    workspace-membership file, not a manifest (see `pnpm_workspace_member_names`)
+    -- but it still needs a `PARSERS` entry so `find_manifests`/`parse_manifest`
+    recognize and return it (as an ordinary, zero-dependency scan target)
+    rather than raising "don't know how to parse this file" the moment a
+    caller passes it directly, the same way an empty-but-recognized
+    manifest of any other format is handled.
+    """
+    return []
+
+
 PARSERS = {
     "requirements.txt": parse_requirements_txt,
     "pyproject.toml": parse_pyproject_toml,
     "package.json": parse_package_json,
     "Pipfile": parse_pipfile,
     "setup.cfg": parse_setup_cfg,
+    "pnpm-workspace.yaml": _parse_pnpm_workspace_yaml,
 }
 
 

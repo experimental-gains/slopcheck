@@ -12,6 +12,7 @@ from slopcheck.parsers import (
     parse_pyproject_toml,
     parse_requirements_txt,
     parse_setup_cfg,
+    pnpm_workspace_member_names,
     requirements_txt_files_touched,
 )
 
@@ -202,6 +203,43 @@ def test_npm_workspace_member_names_ignores_non_workspace_package_json(tmp_path:
     plain.write_text(json.dumps({"dependencies": {"left-pad": "^1.0.0"}}))
 
     assert npm_workspace_member_names([plain]) == []
+
+
+def test_pnpm_workspace_member_names_from_separate_yaml_file(tmp_path: Path):
+    # Regression test for a real-world find: pnpm declares workspace
+    # membership an entirely different way from npm/Yarn Classic
+    # (`test_npm_workspace_member_names_from_array_and_object_forms` above)
+    # -- a sibling `pnpm-workspace.yaml`, not `package.json`'s `workspaces`
+    # field at all (pnpm never reads that field). Confirmed live (pnpm
+    # 9.15.0, a from-scratch two-package pnpm workspace with
+    # `link-workspace-packages=true` set in a root `.npmrc` -- a real,
+    # documented pnpm setting, the default before pnpm 8 and still commonly
+    # carried over in older/migrated monorepos): a root `devDependencies`
+    # entry naming a sibling workspace member with an ordinary semver range
+    # (no `workspace:` protocol) resolved entirely locally -- `pnpm install`
+    # symlinked the local directory with zero requests to
+    # `registry.npmjs.org` for that name. Before this fix, `pnpm_workspace_
+    # member_names` didn't exist at all and `pnpm-workspace.yaml` was never
+    # read, so a pnpm monorepo shaped this way had every private, unpublished
+    # workspace member reported as a plain `not_found` hallucination.
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    member = root / "packages" / "internal-lib"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "@scratch/pnpm-internal-lib", "private": True}))
+
+    pairs = pnpm_workspace_member_names([root / "pnpm-workspace.yaml"])
+
+    assert dict(pairs) == {root: {"@scratch/pnpm-internal-lib"}}
+
+
+def test_pnpm_workspace_member_names_ignores_missing_or_empty_packages_key(tmp_path: Path):
+    no_packages = tmp_path / "no-packages" / "pnpm-workspace.yaml"
+    no_packages.parent.mkdir()
+    no_packages.write_text("onlyBuiltDependencies:\n  - some-native-pkg\n")
+
+    assert pnpm_workspace_member_names([no_packages]) == []
 
 
 def test_parse_package_json_skips_bare_github_shorthand_and_other_git_hosts(tmp_path: Path):

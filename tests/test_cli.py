@@ -430,6 +430,35 @@ def test_npm_workspace_member_skipped_not_flagged_not_found(tmp_path: Path):
     assert results == []
 
 
+def test_pnpm_workspace_member_skipped_not_flagged_not_found(tmp_path: Path):
+    # Real-world false positive, pnpm's own version of
+    # test_npm_workspace_member_skipped_not_flagged_not_found above: pnpm
+    # declares workspace membership via a separate `pnpm-workspace.yaml`
+    # file, not package.json's `workspaces` field (pnpm never reads that
+    # field at all). Confirmed live (pnpm 9.15.0, real `pnpm install`
+    # against a from-scratch two-package pnpm workspace with
+    # `link-workspace-packages=true` in a root `.npmrc` -- a real,
+    # documented pnpm setting, the default before pnpm 8): a root
+    # `devDependencies` entry naming the sibling workspace member with an
+    # ordinary semver range resolved entirely locally with zero
+    # `registry.npmjs.org` requests for that name. Before this fix, `scan()`
+    # had zero notion of `pnpm-workspace.yaml`, so this same real, private,
+    # unpublished workspace member was reported as a plain `not_found`
+    # hallucination.
+    (tmp_path / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    (tmp_path / "package.json").write_text(
+        json.dumps({"devDependencies": {"@scratch/pnpm-internal-lib": "^1.0.0"}})
+    )
+    member = tmp_path / "packages" / "internal-lib"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "@scratch/pnpm-internal-lib", "private": True}))
+
+    with patch.dict(cli.CHECKERS, {"npm": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert results == []
+
+
 def test_npm_workspace_member_scoping_does_not_hide_an_unrelated_project_with_the_same_name(tmp_path: Path):
     # A workspace member name is only ever resolved locally *within* that
     # workspace's own directory subtree -- an unrelated project elsewhere in

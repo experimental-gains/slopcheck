@@ -13,6 +13,7 @@ from .parsers import (
     find_manifests,
     npm_workspace_member_names,
     parse_manifest,
+    pnpm_workspace_member_names,
     requirements_txt_files_touched,
 )
 from .private_registry import (
@@ -107,10 +108,16 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     # (declared via the ordinary `workspaces` field, not the `workspace:`
     # protocol `_NON_REGISTRY_PREFIXES` already skips at parse time) never
     # reaches the registry for a real `npm install`/`yarn install` — see
-    # `npm_workspace_member_names`'s docstring. Filtered out here, before
-    # dedup/counting, the same "never became a checkable dependency at all"
-    # treatment an ordinary `workspace:*`-prefixed entry already gets.
-    workspace_pairs = npm_workspace_member_names([p for p in paths if p.name == "package.json"])
+    # `npm_workspace_member_names`'s docstring. pnpm declares workspace
+    # membership an entirely different way — a sibling `pnpm-workspace.yaml`,
+    # not `package.json`'s `workspaces` field at all — so it needs its own
+    # source of (root, member names) pairs; see `pnpm_workspace_member_names`.
+    # Filtered out here, before dedup/counting, the same "never became a
+    # checkable dependency at all" treatment an ordinary `workspace:*`-
+    # prefixed entry already gets.
+    workspace_pairs = npm_workspace_member_names(
+        [p for p in paths if p.name == "package.json"]
+    ) + pnpm_workspace_member_names([p for p in paths if p.name == "pnpm-workspace.yaml"])
     if workspace_pairs:
         deps = [d for d in deps if not _is_npm_workspace_member(d, workspace_pairs)]
 
