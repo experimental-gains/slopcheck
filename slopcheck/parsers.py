@@ -210,6 +210,57 @@ def requirements_txt_files_touched(path: Path) -> set[Path]:
     return touched
 
 
+def _parse_requirement_lines(
+    lines: list[str], base_dir: Path, source: str, seen: set[Path]
+) -> tuple[list[Dependency], set[Path]]:
+    """Shared pip-requirements-line logic: name extraction plus -r/-c/-e/URL handling.
+
+    Factored out of `_parse_requirements_txt` so `parse_environment_yml`'s conda
+    `pip:` block (a real pip requirement per line, per conda's own
+    `conda/env/installers/pip.py install()`, just sourced from a YAML sequence
+    instead of a `.txt` file's lines) gets the exact same `-r`/`--requirement`
+    recursion, `-c`/`--constraint` skip, and editable/URL handling as an
+    ordinary `requirements.txt` — see `parse_environment_yml`'s own docstring
+    for the live-verified gap this closed.
+
+    `base_dir` is where a `-r`/`-c` target's relative path is resolved against
+    -- the referencing requirements.txt's own directory for a nested `-r`, or
+    (for the conda case) the `environment.yml`'s own directory, matching
+    conda's real `get_pip_workdir()` exactly (see `parse_environment_yml`).
+    `source` is the `Dependency.source` recorded for a name matched directly
+    from `lines` (a nested `-r` target still gets its own file's path as
+    `source`, via the recursive `_parse_requirements_txt` call, not this
+    value).
+    """
+    deps: list[Dependency] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Strip a trailing comment before checking for -r/-c/-e/-- prefixes
+        # too, not just before the name regex below — a referenced file can
+        # carry an explanatory trailing comment the same way an ordinary
+        # dependency line can (e.g. "-r base.txt  # shared deps"), and
+        # leaving it on would fold the comment text into the target path.
+        line = _strip_inline_comment(line)
+        if not line:
+            continue
+        req_match = _REQ_FILE_RE.match(line)
+        if req_match:
+            target = base_dir / req_match.group("target")
+            nested_deps, seen = _parse_requirements_txt(target, seen)
+            deps.extend(nested_deps)
+            continue
+        if _CONSTRAINT_FILE_RE.match(line) or line.startswith(("-e ", "--")):
+            continue
+        if "://" in line:
+            continue
+        match = _REQ_LINE_RE.match(line)
+        if match:
+            deps.append(Dependency(match.group("name"), "pypi", source))
+    return deps, seen
+
+
 def _parse_requirements_txt(path: Path, seen: set[Path]) -> tuple[list[Dependency], set[Path]]:
     resolved = path.resolve()
     if resolved in seen:
@@ -225,33 +276,7 @@ def _parse_requirements_txt(path: Path, seen: set[Path]) -> tuple[list[Dependenc
     except OSError as e:
         raise ManifestParseError(f"{path}: referenced requirements file not found ({e})") from e
 
-    deps = []
-    for raw_line in _join_backslash_continuations(text):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # Strip a trailing comment before checking for -r/-c/-e/-- prefixes
-        # too, not just before the name regex below — a referenced file can
-        # carry an explanatory trailing comment the same way an ordinary
-        # dependency line can (e.g. "-r base.txt  # shared deps"), and
-        # leaving it on would fold the comment text into the target path.
-        line = _strip_inline_comment(line)
-        if not line:
-            continue
-        req_match = _REQ_FILE_RE.match(line)
-        if req_match:
-            target = path.parent / req_match.group("target")
-            nested_deps, seen = _parse_requirements_txt(target, seen)
-            deps.extend(nested_deps)
-            continue
-        if _CONSTRAINT_FILE_RE.match(line) or line.startswith(("-e ", "--")):
-            continue
-        if "://" in line:
-            continue
-        match = _REQ_LINE_RE.match(line)
-        if match:
-            deps.append(Dependency(match.group("name"), "pypi", str(path)))
-    return deps, seen
+    return _parse_requirement_lines(_join_backslash_continuations(text), path.parent, str(path), seen)
 
 
 def _pep621_deps(data: dict) -> list[str]:
@@ -1688,24 +1713,49 @@ def parse_environment_yml(path: Path) -> list[Dependency]:
     channel, not PyPI, and checking it against PyPI would be a false
     positive (a real, non-hallucinated conda-only package like
     `cudatoolkit` simply isn't a PyPI release at all).
+
+    The paragraph above claimed the `pip:` list gets "the exact same
+    `-r`/`--requirement`/`--constraint`/URL directives ... reused here rather
+    than reimplemented" — that claim didn't actually hold: this function used
+    to match each `pip:` line against `_REQ_LINE_RE` directly, with only an
+    `-e `/`--`/`://` skip inlined by hand, and never called
+    `_parse_requirements_txt`/`_REQ_FILE_RE` at all. `-r other.txt`/
+    `--requirement other.txt` doesn't start with `-e `/`--` and doesn't match
+    `_REQ_LINE_RE` either (no leading name character), so it fell through
+    both checks and was silently dropped — not "handled the same way as
+    `-e`/URL", just as unrecognized as a stray typo, even though a real
+    nested pip requirements file referenced this way is genuinely followed.
+
+    Confirmed live against conda's actual, current `install()`
+    (conda/env/installers/pip.py, read directly off github.com/conda/conda's
+    `main` branch): the `pip:` list is written into a temp requirements file
+    inside `get_pip_workdir(args.file)` — `os.path.dirname(os.path.abspath(
+    <path to this environment.yml>))`, i.e. this file's own directory, not a
+    throwaway tmpdir — and `pip install -U -r <tmpfile>` is run with that
+    same directory as `cwd`. Real pip's own requirements-file parser then
+    recurses into any `-r`/`--requirement` target from there exactly as it
+    would for a standalone `requirements.txt`, resolving a relative target
+    against this file's directory. Live-verified end-to-end with a real
+    Miniforge/conda 26.7.2 install (no mocking): an `environment.yml` whose
+    `pip:` list was just `- -r requirements-dev.txt`, with a sibling
+    `requirements-dev.txt` naming a hallucinated package, made
+    `conda env create -f environment.yml` genuinely try (and fail) to `pip
+    install` that hallucinated name — while pre-fix `parse_environment_yml`
+    reported zero dependencies for the identical file, the same silent
+    false-all-clear shape this function was originally written to close for
+    `environment.yml` as a whole. Fixed by routing the extracted `pip:` lines
+    through `_parse_requirement_lines` — the same per-line `-r`/`-c`/`-e`/URL
+    logic `_parse_requirements_txt` already uses — with this file's own
+    directory as the base for resolving a nested target, matching conda's
+    real `get_pip_workdir()` exactly.
     """
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as e:
         raise ManifestParseError(f"{path}: couldn't read ({e})") from e
-    deps = []
-    for raw_line in _environment_yml_pip_requirement_lines(text):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        line = _strip_inline_comment(line)
-        if not line:
-            continue
-        if line.startswith(("-e ", "--")) or "://" in line:
-            continue
-        match = _REQ_LINE_RE.match(line)
-        if match:
-            deps.append(Dependency(match.group("name"), "pypi", str(path)))
+    deps, _seen = _parse_requirement_lines(
+        _environment_yml_pip_requirement_lines(text), path.parent, str(path), set()
+    )
     return deps
 
 

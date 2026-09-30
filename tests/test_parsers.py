@@ -1889,6 +1889,55 @@ def test_parse_environment_yml_reads_pip_section_only(tmp_path: Path):
     assert all(dep.source == str(env_file) for dep in deps)
 
 
+def test_parse_environment_yml_recurses_into_nested_r_file(tmp_path: Path):
+    # Real-world find: conda's own `conda/env/installers/pip.py` `install()`
+    # writes the `pip:` list into a temp requirements file inside
+    # `get_pip_workdir(args.file)` -- confirmed by reading that function
+    # directly (`os.path.dirname(os.path.abspath(<environment.yml path>))`,
+    # i.e. this file's own directory, not a throwaway tmpdir) -- and runs
+    # `pip install -U -r <tmpfile>` with that same directory as `cwd`. Real
+    # pip's own requirements-file parser then recurses into a `-r`/
+    # `--requirement` target from there exactly like it would for a
+    # standalone requirements.txt, resolved relative to that directory.
+    # Live-verified end-to-end with a real Miniforge/conda 26.7.2 install: an
+    # environment.yml whose `pip:` list was just `- -r requirements-dev.txt`,
+    # with a sibling `requirements-dev.txt` naming a hallucinated package,
+    # made `conda env create` genuinely try (and fail) to `pip install` that
+    # name. Before this fix, `parse_environment_yml` matched each `pip:`
+    # line against `_REQ_LINE_RE` directly with only an `-e `/`--`/`://`
+    # skip inlined by hand -- `-r requirements-dev.txt` matches neither that
+    # skip nor `_REQ_LINE_RE` (no leading name character), so it was
+    # silently dropped and the nested file's dependencies, hallucinated or
+    # not, were never checked at all: a real "0 dependencies checked, all
+    # clean" false-all-clear for a conda project splitting its pip
+    # dependencies across files the same ordinary way a standalone
+    # requirements.txt project already can (already handled there, just
+    # never wired into this sibling parser).
+    (tmp_path / "requirements-dev.txt").write_text(
+        "requests==2.31.0\ntotally-hallucinated-conda-nested-req-xyz-777==1.0.0\n"
+    )
+    env_file = tmp_path / "environment.yml"
+    env_file.write_text(
+        "\n".join(
+            [
+                "name: nestedtest",
+                "dependencies:",
+                "  - python=3.11",
+                "  - pip",
+                "  - pip:",
+                "    - -r requirements-dev.txt",
+                "    - flask",
+            ]
+        )
+    )
+    deps = parse_environment_yml(env_file)
+    names = {dep.name for dep in deps}
+    assert names == {"requests", "totally-hallucinated-conda-nested-req-xyz-777", "flask"}
+    by_name = {dep.name: dep for dep in deps}
+    assert by_name["requests"].source == str(tmp_path / "requirements-dev.txt")
+    assert by_name["flask"].source == str(env_file)
+
+
 def test_find_manifests_discovers_environment_yml_and_yaml(tmp_path: Path):
     (tmp_path / "environment.yml").write_text("dependencies:\n  - pip:\n    - requests\n")
     named_dir = tmp_path / "sub"
