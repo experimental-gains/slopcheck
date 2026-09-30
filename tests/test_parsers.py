@@ -5,6 +5,7 @@ from slopcheck.parsers import (
     ManifestParseError,
     find_manifests,
     npm_workspace_member_names,
+    parse_environment_yml,
     parse_manifest,
     parse_package_json,
     parse_pipfile,
@@ -1830,4 +1831,76 @@ def test_parse_manifest_routes_setup_cfg_to_setup_cfg_parser(tmp_path: Path):
     cfg = tmp_path / "setup.cfg"
     cfg.write_text("[options]\ninstall_requires =\n    requests\n")
     names = {dep.name for dep in parse_manifest(cfg)}
+    assert names == {"requests"}
+
+
+def test_parse_environment_yml_reads_pip_section_only(tmp_path: Path):
+    # Real-world find: a conda `environment.yml`/`environment.yaml` had no
+    # filename entry in `PARSERS`/`find_manifests` at all, so a conda-based
+    # project's PyPI dependencies -- listed under `dependencies: - pip: -
+    # ...`, per conda's own documented "mixed" format -- were never scanned.
+    # Shape confirmed against a real, currently-used file, CompVis/latent-
+    # diffusion's actual `environment.yaml`
+    # (https://github.com/CompVis/latent-diffusion/blob/main/environment.yaml).
+    # Confirmed against conda's own source
+    # (conda/env/installers/pip.py, `install()`): every `pip:` list entry is
+    # written verbatim into a temporary `requirements.txt` and installed via
+    # a real `pip install -U -r <tmpfile>` subprocess call -- so a
+    # hallucinated name placed there is genuinely sent to PyPI by `conda env
+    # create`, exactly like an ordinary `requirements.txt` entry, while the
+    # top-level `dependencies:` list items (`python=3.8.5`, `pytorch=1.11.0`,
+    # `cudatoolkit=11.3`) are conda packages resolved from conda channels, not
+    # PyPI, and must NOT be checked against it (`cudatoolkit`/`pytorch`
+    # pinned this way aren't real PyPI releases at all, or aren't the same
+    # package if they happen to exist there).
+    env_file = tmp_path / "environment.yaml"
+    env_file.write_text(
+        "\n".join(
+            [
+                "name: ldm",
+                "channels:",
+                "  - pytorch",
+                "  - defaults",
+                "dependencies:",
+                "  - python=3.8.5",
+                "  - pip=20.3",
+                "  - cudatoolkit=11.3",
+                "  - pytorch=1.11.0",
+                "  - numpy=1.19.2",
+                "  - pip:",
+                "    - diffusers",
+                "    - opencv-python==4.1.2.30",
+                "    - test-tube>=0.7.5",
+                "    - totally-hallucinated-condapip-xyz-123",
+                "    - -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers",
+                "    - -e .",
+            ]
+        )
+    )
+    deps = parse_environment_yml(env_file)
+    names = {dep.name for dep in deps}
+    assert names == {
+        "diffusers",
+        "opencv-python",
+        "test-tube",
+        "totally-hallucinated-condapip-xyz-123",
+    }
+    assert all(dep.ecosystem == "pypi" for dep in deps)
+    assert all(dep.source == str(env_file) for dep in deps)
+
+
+def test_find_manifests_discovers_environment_yml_and_yaml(tmp_path: Path):
+    (tmp_path / "environment.yml").write_text("dependencies:\n  - pip:\n    - requests\n")
+    named_dir = tmp_path / "sub"
+    named_dir.mkdir()
+    (named_dir / "environment.yaml").write_text("dependencies:\n  - pip:\n    - flask\n")
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "environment.yml" in found
+    assert "environment.yaml" in found
+
+
+def test_parse_manifest_routes_environment_yml_to_environment_yml_parser(tmp_path: Path):
+    env_file = tmp_path / "environment.yml"
+    env_file.write_text("dependencies:\n  - pip:\n    - requests\n")
+    names = {dep.name for dep in parse_manifest(env_file)}
     assert names == {"requests"}

@@ -1611,6 +1611,104 @@ def parse_package_json(path: Path) -> list[Dependency]:
     return deps
 
 
+_ENV_YML_TOP_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+):\s*(.*)$")
+_ENV_YML_LIST_ITEM_RE = re.compile(r"^-\s*(.*)$")
+
+
+def _environment_yml_pip_requirement_lines(text: str) -> list[str]:
+    """Extract conda `environment.yml`'s nested `pip:` list as raw requirement-line strings.
+
+    A conda environment file's own "mixed" dependency format
+    (https://conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html#create-env-file-manually)
+    is a top-level `dependencies:` block sequence where every ordinary item
+    names a conda package (`python=3.8.5`, `pytorch=1.11.0`), except one
+    item, `pip:`, which itself carries a *nested* block sequence of PyPI
+    package specs instead of naming a conda package at all -- e.g. real,
+    currently-used `CompVis/latent-diffusion`:
+    `dependencies:\\n  - python=3.8.5\\n  - pip=20.3\\n  - pip:\\n    -
+    albumentations==0.4.3\\n    - -e git+https://...`. Not a general YAML
+    parser, the same hand-parsed-subset approach already used for
+    `pnpm-workspace.yaml`'s `packages:` list (`_pnpm_workspace_patterns`)
+    and Yarn Berry's `.yarnrc.yml` -- a real `environment.yml`'s
+    `dependencies:`/`pip:` values are always plain block sequences,
+    confirmed against conda's own generated files and multiple real
+    upstream repos. Flow-style (`dependencies: [python=3.8, {pip: [...]}]`)
+    is a known gap, not worth the added complexity for a form conda's own
+    tooling (`conda env export`) never generates, mirroring the pnpm/Yarn
+    parsers' identical documented gap.
+    """
+    lines: list[str] = []
+    in_dependencies = False
+    pip_indent: int | None = None
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent == 0:
+            top_match = _ENV_YML_TOP_KEY_RE.match(stripped)
+            in_dependencies = bool(top_match) and top_match.group(1) == "dependencies" and not top_match.group(2)
+            pip_indent = None
+            continue
+        if not in_dependencies:
+            continue
+        if pip_indent is not None and indent > pip_indent:
+            item_match = _ENV_YML_LIST_ITEM_RE.match(stripped)
+            if item_match:
+                lines.append(item_match.group(1))
+            continue
+        pip_indent = None
+        item_match = _ENV_YML_LIST_ITEM_RE.match(stripped)
+        if item_match and item_match.group(1).strip() == "pip:":
+            pip_indent = indent
+    return lines
+
+
+def parse_environment_yml(path: Path) -> list[Dependency]:
+    """Parse a conda `environment.yml`/`environment.yaml`'s nested `pip:` dependency list.
+
+    conda's own docs (link above) document this "mixed" format as the
+    normal way to combine conda packages with PyPI-only ones in one
+    environment file, and it's real, current, and common in ML/data-science
+    repos that mix a conda-only dependency (`cudatoolkit`, `pytorch` pinned
+    to a CUDA build) with ordinary PyPI packages that have no meaningful
+    conda-channel equivalent. Before this fix, `environment.yml`/
+    `environment.yaml` had no `PARSERS`/`find_manifests` entry at all --
+    unlike `.yml`, there's no generic-suffix fallback the way `parse_manifest`
+    treats any unmatched `.txt` file as `requirements.txt`-shaped -- so a
+    conda-only project's entire PyPI dependency list, hallucinated names
+    included, was silently never scanned. Confirmed against conda's own
+    `conda/env/installers/pip.py` `install()`: every `pip:` entry is written
+    verbatim into a temporary `requirements.txt` and passed to a real `pip
+    install -U -r <tmpfile>` subprocess -- the exact same install path (and
+    the same `-e`/`--requirement`/`--constraint`/URL directives) already
+    handled for a standalone `requirements.txt` above, reused here rather
+    than reimplemented. Only the nested `pip:` list is read; every other
+    `dependencies:` item names a conda package resolved from a conda
+    channel, not PyPI, and checking it against PyPI would be a false
+    positive (a real, non-hallucinated conda-only package like
+    `cudatoolkit` simply isn't a PyPI release at all).
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        raise ManifestParseError(f"{path}: couldn't read ({e})") from e
+    deps = []
+    for raw_line in _environment_yml_pip_requirement_lines(text):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = _strip_inline_comment(line)
+        if not line:
+            continue
+        if line.startswith(("-e ", "--")) or "://" in line:
+            continue
+        match = _REQ_LINE_RE.match(line)
+        if match:
+            deps.append(Dependency(match.group("name"), "pypi", str(path)))
+    return deps
+
+
 def _parse_pnpm_workspace_yaml(path: Path) -> list[Dependency]:
     """`pnpm-workspace.yaml` declares no dependencies of its own -- it's a
     workspace-membership file, not a manifest (see `pnpm_workspace_member_names`)
@@ -1630,6 +1728,8 @@ PARSERS = {
     "Pipfile": parse_pipfile,
     "setup.cfg": parse_setup_cfg,
     "pnpm-workspace.yaml": _parse_pnpm_workspace_yaml,
+    "environment.yml": parse_environment_yml,
+    "environment.yaml": parse_environment_yml,
 }
 
 
@@ -1720,7 +1820,8 @@ def parse_manifest(path: Path) -> list[Dependency]:
         raise ManifestParseError(
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
-            "setup.cfg, pylock.toml, or a *.txt requirements file)"
+            "setup.cfg, pylock.toml, environment.yml/environment.yaml, or a *.txt "
+            "requirements file)"
         )
     try:
         return parser(path)

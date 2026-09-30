@@ -546,7 +546,8 @@ def test_help_text_matches_source(capsys):
     assert "('slopsquatted') package names before you install them." in normalized
     assert "Manifest files to check, or directories to search" in normalized
     assert (
-        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg, pylock.toml). "
+        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg, pylock.toml, "
+        "environment.yml). "
         "Defaults to the current directory." in normalized
     )
     assert "Emit machine-readable JSON instead of text." in normalized
@@ -610,7 +611,7 @@ def test_no_manifests_error_message(tmp_path: Path, capsys):
     # still contains the real text as a substring.
     assert err == (
         "slopcheck: no requirements.txt, pyproject.toml, package.json, Pipfile, "
-        "setup.cfg, or pylock.toml found\n"
+        "setup.cfg, pylock.toml, or environment.yml found\n"
     )
 
 
