@@ -1584,6 +1584,92 @@ def pnpm_workspace_member_names(pnpm_workspace_paths: list[Path]) -> list[tuple[
     return pairs
 
 
+def _pdm_workspace_patterns(data: dict) -> list[str]:
+    """Extract glob/literal member patterns from a pyproject.toml's `[tool.pdm.workspace]`.
+
+    PDM's own workspace feature (https://pdm-project.org/latest/usage/workspace/,
+    "Added in 2.28.0") is a *third* monorepo-membership mechanism this module
+    handles, structurally closer to pnpm's than to uv's: the root project's
+    `[tool.pdm.workspace] members = ["packages/foo", "tools/*"]` names sibling
+    directories (direct paths or glob patterns, mixed freely) that each carry
+    their own `pyproject.toml`. Unlike uv (`[tool.uv.workspace]`, which requires
+    a matching `[tool.uv.sources] name = { workspace = true }` entry before a
+    plain dependency on a member resolves locally — confirmed live above, real
+    `uv lock` Fatals without it), PDM's own docs give the member-dependency
+    example as a bare `dependencies = ["bar"]`, no `[tool.pdm.sources]`
+    involved at all: "Workspace members can depend on each other by package
+    name... PDM resolves it from the workspace checkout as an editable
+    package."
+    """
+    workspace = data.get("tool", {}).get("pdm", {}).get("workspace", {})
+    if not isinstance(workspace, dict):
+        return []
+    return [m for m in workspace.get("members", []) if isinstance(m, str)]
+
+
+def pdm_workspace_member_names(pyproject_paths: list[Path]) -> list[tuple[Path, set[str]]]:
+    """For every pyproject.toml declaring `[tool.pdm.workspace]`, the local package names it resolves without the registry.
+
+    Confirmed live (PDM 2.29.2, `pdm lock -v` against a from-scratch two-project
+    workspace: root `pyproject.toml` with `dependencies =
+    ["totally-hallucinated-pdm-workspace-xyz-123"]` and `[tool.pdm.workspace]
+    members = ["packages/*"]`, member `packages/bar/pyproject.toml` naming
+    itself `totally-hallucinated-pdm-workspace-xyz-123`, no `[tool.pdm.sources]`
+    anywhere): `pdm lock` resolved the dependency entirely locally ("The file
+    packages/bar is a local directory, use it directly" / "Adding new pin:
+    totally-hallucinated-pdm-workspace-xyz-123 file:///${PROJECT_ROOT}/packages/bar")
+    with zero PyPI requests. Before this fix, `parse_pyproject_toml` had no
+    notion of `[tool.pdm.workspace]` at all, so a plain `[project.dependencies]`
+    entry naming a real workspace sibling (PDM's own documented pattern, and
+    the most natural way to write one — no special table needed, unlike uv)
+    was checked against PyPI and reported `not_found` whenever the sibling's
+    name wasn't independently published there — the exact same false-positive
+    shape `npm_workspace_member_names`/`pnpm_workspace_member_names` already
+    fix for their own ecosystems' workspace mechanisms.
+
+    Each member directory's own declared name comes from its own
+    `pyproject.toml`'s `[project.name]` (an ordinary PEP 621 project, unlike
+    npm/pnpm's `package.json`), so this can't reuse
+    `_workspace_member_names_from_patterns` (hardcoded to `package.json`/JSON)
+    unchanged. Matched PEP 503-normalized by the caller
+    (`cli._is_pdm_workspace_member`), the same rule every other PyPI name
+    comparison in this module already uses, since a workspace member's
+    `[project.name]` and the string naming it in `dependencies` can differ in
+    case/separators.
+    """
+    pairs: list[tuple[Path, set[str]]] = []
+    for path in pyproject_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        patterns = _pdm_workspace_patterns(data)
+        if not patterns:
+            continue
+        names: set[str] = set()
+        for pattern in patterns:
+            try:
+                matches = list(path.parent.glob(pattern))
+            except (ValueError, NotImplementedError):
+                continue
+            for member_dir in matches:
+                member_pyproject = member_dir / "pyproject.toml"
+                if not member_pyproject.is_file():
+                    continue
+                try:
+                    member_data = tomllib.loads(member_pyproject.read_text(encoding="utf-8-sig"))
+                except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+                    continue
+                name = member_data.get("project", {}).get("name")
+                if isinstance(name, str):
+                    names.add(name)
+        if names:
+            pairs.append((path.parent, names))
+    return pairs
+
+
 def parse_package_json(path: Path) -> list[Dependency]:
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     deps = []

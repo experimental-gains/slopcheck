@@ -509,6 +509,79 @@ def test_pnpm_workspace_member_skipped_not_flagged_not_found(tmp_path: Path):
     assert results == []
 
 
+def test_pdm_workspace_member_skipped_not_flagged_not_found(tmp_path: Path):
+    # Real-world false positive, PDM's own version of
+    # test_npm_workspace_member_skipped_not_flagged_not_found /
+    # test_pnpm_workspace_member_skipped_not_flagged_not_found above: PDM's
+    # workspace feature (https://pdm-project.org/latest/usage/workspace/,
+    # added 2.28.0) declares membership via the root pyproject.toml's
+    # `[tool.pdm.workspace].members`, and a member is referenced with a
+    # plain `dependencies = [...]` entry -- no special sources table needed,
+    # unlike uv's `[tool.uv.workspace]` (confirmed live, real `uv lock`
+    # Fatals without a matching `[tool.uv.sources] name = { workspace =
+    # true }` entry). Confirmed live (PDM 2.29.2, `pdm lock -v`): the
+    # dependency below resolved entirely locally ("The file packages/bar is
+    # a local directory, use it directly") with zero PyPI requests for that
+    # name. Before this fix, `scan()` had zero notion of
+    # `[tool.pdm.workspace]`, so this real, private, unpublished workspace
+    # member was reported as a plain `not_found` hallucination.
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "foo"\n'
+        "dependencies = [\n"
+        '    "totally-hallucinated-pdm-workspace-xyz-123",\n'
+        "]\n"
+        "\n"
+        "[tool.pdm.workspace]\n"
+        'members = ["packages/*"]\n'
+    )
+    member = tmp_path / "packages" / "bar"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text('[project]\nname = "totally-hallucinated-pdm-workspace-xyz-123"\n')
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert results == []
+
+
+def test_pdm_workspace_member_scoping_does_not_hide_an_unrelated_project_with_the_same_name(tmp_path: Path):
+    # Mirrors test_npm_workspace_member_scoping_does_not_hide_an_unrelated_
+    # project_with_the_same_name below, for PDM's own workspace mechanism: a
+    # workspace member name is only resolved locally *within* that
+    # workspace's own directory subtree, so an unrelated project elsewhere in
+    # the same scan naming an ordinary (non-workspace) dependency the same
+    # thing must still be checked normally.
+    workspace_root = tmp_path / "monorepo"
+    workspace_root.mkdir()
+    (workspace_root / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "foo"\n'
+        "dependencies = []\n"
+        "\n"
+        "[tool.pdm.workspace]\n"
+        'members = ["packages/*"]\n'
+    )
+    member = workspace_root / "packages" / "bar"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text('[project]\nname = "shared-name"\n')
+
+    other_project = tmp_path / "other-project"
+    other_project.mkdir()
+    (other_project / "pyproject.toml").write_text(
+        '[project]\nname = "unrelated"\ndependencies = ["shared-name"]\n'
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert len(results) == 1
+    dep, result = results[0]
+    assert dep.name == "shared-name"
+    assert dep.source == str(other_project / "pyproject.toml")
+    assert result.status == "not_found"
+
+
 def test_npm_workspace_member_scoping_does_not_hide_an_unrelated_project_with_the_same_name(tmp_path: Path):
     # A workspace member name is only ever resolved locally *within* that
     # workspace's own directory subtree -- an unrelated project elsewhere in

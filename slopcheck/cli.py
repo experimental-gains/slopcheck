@@ -13,6 +13,7 @@ from .parsers import (
     find_manifests,
     npm_workspace_member_names,
     parse_manifest,
+    pdm_workspace_member_names,
     pnpm_workspace_member_names,
     requirements_txt_files_touched,
 )
@@ -99,6 +100,17 @@ def _is_npm_workspace_member(dep: Dependency, workspace_pairs: list[tuple[Path, 
     return any(dep.name in names and dep_dir.is_relative_to(root.resolve()) for root, names in workspace_pairs)
 
 
+def _is_pdm_workspace_member(dep: Dependency, workspace_pairs: list[tuple[Path, set[str]]]) -> bool:
+    if dep.ecosystem != "pypi":
+        return False
+    dep_dir = Path(dep.source).resolve().parent
+    normalized = _normalize_name(dep.name)
+    return any(
+        dep_dir.is_relative_to(root.resolve()) and any(_normalize_name(n) == normalized for n in names)
+        for root, names in workspace_pairs
+    )
+
+
 def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, LookupResult]]:
     deps: list[Dependency] = []
     for path in paths:
@@ -120,6 +132,18 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     ) + pnpm_workspace_member_names([p for p in paths if p.name == "pnpm-workspace.yaml"])
     if workspace_pairs:
         deps = [d for d in deps if not _is_npm_workspace_member(d, workspace_pairs)]
+
+    # PDM's own workspace mechanism (`[tool.pdm.workspace].members` in the
+    # root pyproject.toml) is a third, independent monorepo-membership
+    # source, structurally closer to pnpm's than to uv's `[tool.uv.workspace]`
+    # (which requires a matching `[tool.uv.sources] name = { workspace = true
+    # }` entry, already excluded at parse time by `_is_uv_registry_source` —
+    # PDM needs none of that, a plain `dependencies = ["bar"]` on a member's
+    # own name resolves locally). See `pdm_workspace_member_names`'s docstring
+    # for the live-verified gap this closes.
+    pdm_workspace_pairs = pdm_workspace_member_names([p for p in paths if p.name == "pyproject.toml"])
+    if pdm_workspace_pairs:
+        deps = [d for d in deps if not _is_pdm_workspace_member(d, pdm_workspace_pairs)]
 
     # De-dupe same name+ecosystem across files, keep first source for reporting.
     seen: dict[tuple[str, str], Dependency] = {}

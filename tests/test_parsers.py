@@ -13,6 +13,7 @@ from slopcheck.parsers import (
     parse_pyproject_toml,
     parse_requirements_txt,
     parse_setup_cfg,
+    pdm_workspace_member_names,
     pnpm_workspace_member_names,
     requirements_txt_files_touched,
 )
@@ -241,6 +242,51 @@ def test_pnpm_workspace_member_names_ignores_missing_or_empty_packages_key(tmp_p
     no_packages.write_text("onlyBuiltDependencies:\n  - some-native-pkg\n")
 
     assert pnpm_workspace_member_names([no_packages]) == []
+
+
+def test_pdm_workspace_member_names_from_tool_pdm_workspace(tmp_path: Path):
+    # Regression test for a real-world find: PDM's own workspace feature
+    # (https://pdm-project.org/latest/usage/workspace/, added 2.28.0) is a
+    # *third* monorepo-membership mechanism, distinct from both uv's
+    # `[tool.uv.workspace]` (which additionally requires a matching
+    # `[tool.uv.sources] name = { workspace = true }` entry before a plain
+    # dependency on a member resolves locally -- confirmed live, real `uv
+    # lock` Fatals without it: "is included as a workspace member, but is
+    # missing an entry in tool.uv.sources") and npm/pnpm's package.json-/
+    # pnpm-workspace.yaml-based mechanisms. Confirmed live (PDM 2.29.2, `pdm
+    # lock -v` against a from-scratch two-project workspace: root
+    # pyproject.toml with `dependencies =
+    # ["totally-hallucinated-pdm-workspace-xyz-123"]` and `[tool.pdm.workspace]
+    # members = ["packages/*"]`, member `packages/bar/pyproject.toml` naming
+    # itself `totally-hallucinated-pdm-workspace-xyz-123`, no
+    # `[tool.pdm.sources]` anywhere): `pdm lock` resolved the dependency
+    # entirely locally ("The file packages/bar is a local directory, use it
+    # directly" / "Adding new pin: totally-hallucinated-pdm-workspace-xyz-123
+    # file:///${PROJECT_ROOT}/packages/bar") with zero PyPI requests. Before
+    # this fix, `pdm_workspace_member_names` didn't exist at all and
+    # `[tool.pdm.workspace]` was never read, so a PDM workspace shaped this
+    # way had every private, unpublished workspace member reported as a plain
+    # `not_found` hallucination.
+    root = tmp_path / "pdm-monorepo"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "foo"\n\n[tool.pdm.workspace]\nmembers = ["packages/*"]\n'
+    )
+    member = root / "packages" / "bar"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text('[project]\nname = "internal-bar"\n')
+
+    pairs = pdm_workspace_member_names([root / "pyproject.toml"])
+
+    assert dict(pairs) == {root: {"internal-bar"}}
+
+
+def test_pdm_workspace_member_names_ignores_missing_or_empty_members(tmp_path: Path):
+    no_members = tmp_path / "no-members" / "pyproject.toml"
+    no_members.parent.mkdir()
+    no_members.write_text('[project]\nname = "foo"\n\n[tool.pdm]\n')
+
+    assert pdm_workspace_member_names([no_members]) == []
 
 
 def test_parse_package_json_skips_bare_github_shorthand_and_other_git_hosts(tmp_path: Path):
