@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.66
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.67
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.66
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.67
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.66
+    rev: v0.1.67
     hooks:
       - id: slopcheck
 ```
@@ -1142,16 +1142,38 @@ dependencies. Confirmed against a real, currently-used file,
 and against conda's own source (`conda/env/installers/pip.py`,
 `install()`): every `pip:` entry is written verbatim into a temporary
 `requirements.txt` and installed via a real `pip install -U -r
-<tmpfile>` subprocess — the exact same install path already handled for
-a standalone `requirements.txt` above (including its `-e`/VCS-URL
-skip), reused here rather than reimplemented. Before this fix, a
-conda-only project's entire PyPI dependency list — hallucinated names
-included — was silently never scanned; running `slopcheck` against a
-directory containing only an `environment.yml`/`environment.yaml` hit
-the "no manifest found" error, or worse, silently reported "0
-dependencies checked, all clean" whenever any other supported-but-
-dependency-free manifest (a `pyproject.toml` with only `[tool.*]`
-config, say) happened to sit alongside it.
+<tmpfile>` subprocess. Before this fix, a conda-only project's entire
+PyPI dependency list — hallucinated names included — was silently
+never scanned; running `slopcheck` against a directory containing only
+an `environment.yml`/`environment.yaml` hit the "no manifest found"
+error, or worse, silently reported "0 dependencies checked, all clean"
+whenever any other supported-but-dependency-free manifest (a
+`pyproject.toml` with only `[tool.*]` config, say) happened to sit
+alongside it.
+
+A `pip:` entry that's itself a nested `-r`/`--requirement` directive
+(e.g. `- -r requirements-dev.txt`, splitting main/dev pip deps across
+files the same ordinary way a standalone `requirements.txt` project
+already can) is now followed too (fixed in v0.1.67 — v0.1.66 only
+handled `-e`/URL entries, not this one). conda's own `install()` writes
+the `pip:` list into a temp requirements file inside
+`get_pip_workdir(args.file)` — confirmed by reading that function
+directly, this is the `environment.yml`'s own directory, not a
+throwaway tmpdir — and runs `pip install -U -r <tmpfile>` with that
+same directory as the working directory, so real pip's own
+requirements-file parser recurses into a `-r`/`--requirement` target
+exactly like it would for a standalone `requirements.txt`. Verified
+end-to-end with a real Miniforge/conda 26.7.2 install: an
+`environment.yml` whose `pip:` list was just
+`- -r requirements-dev.txt`, with a sibling `requirements-dev.txt`
+naming a hallucinated package, made `conda env create` genuinely try
+(and fail) to `pip install` that name. Before this fix,
+`parse_environment_yml` matched each `pip:` line against its
+requirement-line regex directly with only an `-e `/`--`/`://` skip
+inlined by hand — a bare `-r requirements-dev.txt` line matches neither
+that skip nor the regex (no leading name character), so it was
+silently dropped and the referenced file's dependencies were never
+checked at all.
 
 ## requirements.txt inline comments
 
