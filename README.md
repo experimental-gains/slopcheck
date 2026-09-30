@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.69
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.70
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.69
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.70
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.69
+    rev: v0.1.70
     hooks:
       - id: slopcheck
 ```
@@ -1217,6 +1217,24 @@ hallucinated package name with nothing else naming it) was correctly
 downgraded to `private` when saved as `requirements.txt`, but reported
 as a plain `not_found` hallucination when saved as `requirements.in`,
 purely because of this suffix filter.
+
+PDM's own workspace feature (https://pdm-project.org/latest/usage/workspace/,
+added in PDM 2.28.0) is now recognized too (fixed in v0.1.70): a *third*
+monorepo-membership mechanism, declared in the root project's
+`[tool.pdm.workspace] members = [...]` and structurally closer to pnpm's
+than to uv's — a member is referenced with an ordinary `dependencies =
+["bar"]` entry, no `[tool.pdm.sources]` table needed at all (unlike uv's
+`[tool.uv.workspace]`, which requires a matching `[tool.uv.sources] name =
+{ workspace = true }` entry before a plain dependency resolves locally —
+confirmed live, real `uv lock` Fatals without it: "is included as a
+workspace member, but is missing an entry in tool.uv.sources"). Confirmed
+live (PDM 2.29.2, `pdm lock -v` against a from-scratch two-project
+workspace with no `[tool.pdm.sources]` anywhere): the dependency resolved
+entirely locally ("The file packages/bar is a local directory, use it
+directly") with zero PyPI requests. Before this fix, `[tool.pdm.workspace]`
+wasn't read at all, so a real PDM workspace's own private, unpublished
+sibling package — referenced exactly the way PDM's own docs show — was
+reported as a plain `not_found` hallucination.
 
 ## requirements.txt inline comments
 
