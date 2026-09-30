@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.70
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.71
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.70
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.71
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.70
+    rev: v0.1.71
     hooks:
       - id: slopcheck
 ```
@@ -1235,6 +1235,21 @@ directly") with zero PyPI requests. Before this fix, `[tool.pdm.workspace]`
 wasn't read at all, so a real PDM workspace's own private, unpublished
 sibling package — referenced exactly the way PDM's own docs show — was
 reported as a plain `not_found` hallucination.
+
+Hatch's own `extra-dependencies` field on a named
+`[tool.hatch.envs.<name>]` table (https://hatch.pypa.io/latest/config/environment/overview/#dependencies)
+is now read too (fixed in v0.1.71): it lets an environment that inherits
+from another (implicitly from `default`) add packages on top of the
+inherited `dependencies` list without redeclaring it, and Hatch's own
+`environment_dependencies_complex` resolves it through the exact same
+validation and install path as `dependencies` itself. Confirmed live
+(Hatch 1.18.1): a scratch project with `[tool.hatch.envs.experimental]
+extra-dependencies = ["totally-hallucinated-hatch-extradep-xyz-123"]`
+made `hatch env create experimental` genuinely fail resolving the fake
+name from PyPI ("Could not find a version that satisfies the
+requirement ... (from versions: none)"). Before this fix, `_hatch_deps`
+only ever read `dependencies`, so this sibling field on the same table
+was silently never checked at all.
 
 ## requirements.txt inline comments
 
