@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.64
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.65
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.64
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.65
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.64
+    rev: v0.1.65
     hooks:
       - id: slopcheck
 ```
@@ -1113,6 +1113,20 @@ listing `@npmcli/docs`/`@npmcli/mock-registry`/`@npmcli/mock-globals`
 as plain-semver `devDependencies` even though each is `"private": true`
 and genuinely 404s on the public registry. Before this fix, every such
 name was reported as a plain `not_found` hallucination.
+
+pnpm's own workspace membership is now recognized too (fixed in
+v0.1.65): pnpm declares it an entirely different way from npm/Yarn
+Classic above — a separate `pnpm-workspace.yaml` file at the workspace
+root with its own `packages:` glob list, never `package.json`'s
+`workspaces` field at all. Confirmed live (pnpm 9.15.0) with
+`link-workspace-packages=true` set in a root `.npmrc` — a real,
+documented pnpm setting (https://pnpm.io/settings#linkworkspacepackages)
+and the default before pnpm 8, so still commonly carried over into
+older or migrated monorepos' checked-in config: a root manifest's
+plain-semver-range dependency on a private, unpublished sibling
+resolved entirely locally, with zero registry requests for that name.
+Before this fix, `pnpm-workspace.yaml` wasn't read at all, so the same
+shape was reported as a plain `not_found` hallucination.
 
 ## requirements.txt inline comments
 
