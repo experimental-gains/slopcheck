@@ -204,14 +204,14 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.63
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.64
 ```
 
 ## Usage
 
 ```bash
 # scan the current directory (and every subdirectory) for
-# requirements.txt / pyproject.toml / package.json / Pipfile / setup.cfg
+# requirements.txt / pyproject.toml / package.json / Pipfile / setup.cfg / pylock.toml
 slopcheck
 
 # scan specific files
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.63
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.64
     slopcheck
 ```
 
@@ -239,15 +239,15 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.63
+    rev: v0.1.64
     hooks:
       - id: slopcheck
 ```
 
 Runs on any commit that touches `requirements.txt`, `pyproject.toml`,
-`package.json`, `Pipfile`, or `setup.cfg`. `pre-commit` installs it into
-an isolated Python environment the first time (needs Python 3.10+, no
-other setup).
+`package.json`, `Pipfile`, `setup.cfg`, or `pylock.toml`. `pre-commit`
+installs it into an isolated Python environment the first time (needs
+Python 3.10+, no other setup).
 
 ## Use as a Claude Code / Copilot CLI plugin
 
@@ -272,6 +272,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | `pyproject.toml` (PEP 621 or Poetry) | PyPI |
 | `Pipfile` (Pipenv) | PyPI |
 | `setup.cfg` (setuptools) | PyPI |
+| `pylock.toml`/`pylock.<name>.toml` (PEP 751 lock file) | PyPI |
 | `package.json` | npm |
 
 ## What it isn't
@@ -608,6 +609,32 @@ Pipenv project that also keeps tool config in a dependency-free
 `pyproject.toml` — a common real combination — was silently reported
 as "0 dependencies checked, all clean" while its actual dependencies
 in `Pipfile` went unread).
+
+A [PEP 751](https://peps.python.org/pep-0751/) `pylock.toml` (or its
+named variant, `pylock.<name>.toml`) is now recognized as a manifest
+too (fixed in v0.1.64 — earlier versions had no filename entry for it
+at all, and it's TOML, so the existing `*.txt` fallback for
+oddly-named requirements files never caught it either). It's a real,
+current lock-file format: pip 26.1 (April 2026) shipped experimental
+`pip install -r pylock.toml` support, an alternative to `-r
+requirements.txt`, and uv/PDM/Pipenv can already export to it.
+Confirmed live against real pip 26.2.1: `pip lock -r req.txt -o
+pylock.toml` produces the exact `[[packages]] name = "..." version =
+"..." [[packages.wheels]] url = "https://files.pythonhosted.org/..."`
+shape this parser reads, and a hand-added `[[packages]]` entry naming
+a hallucinated package with no `vcs`/`directory`/`archive`/`sdist`/
+`wheels` at all makes real `pip install -r` refuse the whole file
+outright ("Exactly one of vcs, directory, archive must be set if sdist
+and wheels are not set") before installing anything — while the same
+entry with a fabricated wheel URL installs (or 404s) by that literal
+URL alone, with zero query to the registry for the name, the same
+non-registry-source shape already handled for Poetry's/uv's/Pipfile's
+own git/path table forms, so entries sourced via `packages.vcs`/
+`packages.directory` are skipped here too. Before this fix, a project
+locked this way had every name in it — including any hallucinated
+transitive dependency a real locker faithfully resolved and pinned
+from the registry — silently never checked, the same "0 dependencies
+checked, all clean" false-all-clear as the `Pipfile` gap above.
 
 setuptools' legacy `setup.cfg` `[options] install_requires`/
 `[options.extras_require]` is now recognized as a manifest too (fixed
