@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.68
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.69
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.68
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.69
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.68
+    rev: v0.1.69
     hooks:
       - id: slopcheck
 ```
@@ -1200,6 +1200,23 @@ is handled the same way `requirements.txt`'s own non-canonical `.txt`
 names already are: works when scanned directly, or reached via
 `-r`-recursion, even though it isn't auto-discovered by a bare directory
 scan.
+
+A `-i`/`--extra-index-url`/`--index-url` directive in a `requirements.in`
+file (pip-tools' own hand-edited source file, added as a recognized
+manifest in v0.1.68 above) is now honored the same way one already is in
+a `requirements.txt` (fixed in v0.1.69). The scan for this directive was
+still filtered to `.txt`-suffixed paths only — a filter written back
+when `requirements.txt` was the only requirements-format filename this
+tool recognized, and never revisited when `requirements.in` got its own
+manifest entry one release earlier. `requirements.in` is, if anything,
+*more* likely to carry the actual directive than the compiled `.txt`,
+since it's the file a human (or an LLM coding assistant) edits by hand —
+`pip-compile` just carries it forward into the generated file from
+there. Live-verified: identical content (an `-i` line plus a
+hallucinated package name with nothing else naming it) was correctly
+downgraded to `private` when saved as `requirements.txt`, but reported
+as a plain `not_found` hallucination when saved as `requirements.in`,
+purely because of this suffix filter.
 
 ## requirements.txt inline comments
 
