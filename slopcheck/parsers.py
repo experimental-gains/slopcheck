@@ -320,7 +320,7 @@ def _build_system_deps(data: dict) -> list[str]:
 
 
 def _hatch_deps(data: dict) -> list[str]:
-    """Flatten Hatch's `[tool.hatch.env].requires` and per-environment `dependencies` into requirement specs.
+    """Flatten Hatch's `[tool.hatch.env].requires` and per-environment `dependencies`/`extra-dependencies` into requirement specs.
 
     Hatch (https://hatch.pypa.io/latest/config/environment/overview/,
     the PyPA-recommended build backend/env manager) has two distinct
@@ -328,9 +328,10 @@ def _hatch_deps(data: dict) -> list[str]:
     function above: `[tool.hatch.env] requires` lists environment-plugin
     packages Hatch itself installs (via its own resolver, not even pip)
     before it can even parse the rest of an environment's config, and each
-    `[tool.hatch.envs.<name>] dependencies` lists plain PEP 508 requirement
-    strings installed into that named environment. Confirmed live with
-    Hatch 1.18.1 against a scratch project: a `[tool.hatch.envs.default]
+    `[tool.hatch.envs.<name>]` lists plain PEP 508 requirement strings
+    installed into that named environment under *two* separate fields:
+    `dependencies` and `extra-dependencies`. Confirmed live with Hatch
+    1.18.1 against a scratch project: a `[tool.hatch.envs.default]
     dependencies = ["totally-hallucinated-package-xyz-123"]` table made
     `hatch env create` genuinely fail resolving the fake name from PyPI
     ("Could not find a version that satisfies the requirement ... (from
@@ -338,7 +339,7 @@ def _hatch_deps(data: dict) -> list[str]:
     ["totally-hallucinated-hatch-plugin-xyz-987"]` made the same command
     fail even earlier, while syncing environment plugin requirements
     ("No solution found when resolving dependencies ... was not found in
-    the package registry"). Before this fix neither table had any reader
+    the package registry"). Before that fix neither table had any reader
     here at all, so a hallucinated name planted in either one — a real
     place for one to land, since Hatch is the build backend this project's
     own dependents are as likely to use as Poetry or PDM — sailed through
@@ -348,12 +349,41 @@ def _hatch_deps(data: dict) -> list[str]:
     git/path/url table form), so no registry-source filtering is needed
     here the way `_is_poetry_registry_dep`/`_is_uv_registry_source` do it
     for their own tables.
+
+    `extra-dependencies` (https://hatch.pypa.io/latest/config/environment/overview/#dependencies,
+    "If you define environments with dependencies that only slightly
+    differ from their inherited environments, you can use the
+    `extra-dependencies` option to avoid redeclaring the `dependencies`
+    option") is Hatch's own documented way to add packages to an
+    environment that inherits from another (e.g. from `default`) without
+    repeating its whole `dependencies` list. Hatch's own
+    `environment_dependencies_complex` (read directly from installed
+    Hatch 1.18.1's `hatch/env/plugin/interface.py`) resolves this field
+    through the exact same validation and dependency-object construction
+    as `dependencies` itself — both fields are simply iterated in the same
+    loop (`for option in ("dependencies", "extra-dependencies")`), with no
+    difference in how either is installed. This function used to only
+    read `dependencies`, missing `extra-dependencies` entirely, even
+    though it's an ordinary field on the *same* env table this function
+    already reads, not a feature of a different table. Confirmed real and
+    current, not hypothetical: live-verified against real Hatch 1.18.1 —
+    a scratch project with `[tool.hatch.envs.default] dependencies =
+    ["requests"]` and `[tool.hatch.envs.experimental] extra-dependencies =
+    ["totally-hallucinated-hatch-extradep-xyz-123"]` made `hatch env
+    create experimental` genuinely try (and fail) to resolve the fake name
+    from PyPI ("Could not find a version that satisfies the requirement
+    totally-hallucinated-hatch-extradep-xyz-123 (from versions: none)"),
+    while the pre-fix parser here reported zero dependencies for it at
+    all — the same silent false-all-clear shape as every other
+    unhandled-field gap already fixed in this module, just for a sibling
+    field on a table this function already partially reads.
     """
     hatch = data.get("tool", {}).get("hatch", {})
     names = list(hatch.get("env", {}).get("requires", []))
     for env in hatch.get("envs", {}).values():
         if isinstance(env, dict):
             names.extend(env.get("dependencies", []))
+            names.extend(env.get("extra-dependencies", []))
     return names
 
 

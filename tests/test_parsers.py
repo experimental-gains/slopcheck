@@ -1008,6 +1008,45 @@ def test_parse_pyproject_hatch_env_dependencies(tmp_path: Path):
     }
 
 
+def test_parse_pyproject_hatch_env_extra_dependencies(tmp_path: Path):
+    # Hatch's own `extra-dependencies` field
+    # (https://hatch.pypa.io/latest/config/environment/overview/#dependencies)
+    # lets an environment that inherits from another (implicitly from
+    # `default`, unless a different `template` is set) add packages on top
+    # of the inherited `dependencies` list without redeclaring it. It's an
+    # ordinary field on the same [tool.hatch.envs.<name>] table
+    # `dependencies` already lives on, resolved by Hatch's own
+    # `environment_dependencies_complex` through the identical validation
+    # and install path as `dependencies` -- not a separate, rarer
+    # mechanism. Confirmed live with real Hatch 1.18.1 against a scratch
+    # project: `hatch env create experimental` for exactly this shape
+    # genuinely failed resolving the fake name from PyPI ("Could not find
+    # a version that satisfies the requirement
+    # totally-hallucinated-hatch-extradep-xyz-123 (from versions: none)").
+    # Before this fix, `_hatch_deps` only ever read `dependencies`, so this
+    # sibling field was silently never checked at all.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests"]
+
+        [tool.hatch.envs.default]
+        dependencies = ["pytest"]
+
+        [tool.hatch.envs.experimental]
+        extra-dependencies = ["totally-hallucinated-hatch-extradep-xyz-123"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {
+        "requests",
+        "pytest",
+        "totally-hallucinated-hatch-extradep-xyz-123",
+    }
+
+
 def test_parse_pyproject_build_system_requires(tmp_path: Path):
     # PEP 518 makes [build-system] requires mandatory for any project pip
     # can build from source — a plain list of PEP 508 requirement strings
