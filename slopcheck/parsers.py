@@ -1771,8 +1771,36 @@ def _parse_pnpm_workspace_yaml(path: Path) -> list[Dependency]:
     return []
 
 
+# pip-tools' own convention (https://pip-tools.readthedocs.io/en/stable/#requirementsin-vs-requirementstxt):
+# a hand-edited "source" file, `requirements.in`, gets compiled by
+# `pip-compile` into the fully-pinned `requirements.txt` this module already
+# reads. `pip-compile` parses `requirements.in` with pip's own requirements-
+# file parser (piptools.scripts.compile.py builds its InstallRequirements via
+# pip._internal.req.req_file.parse_requirements, the exact same entry point
+# real pip itself uses for a plain requirements.txt), so it's genuinely the
+# identical format -- `-r`/`-c`/`-e`/inline-comment/backslash-continuation
+# and all -- just under a different, equally conventional filename. Real,
+# current, and common: many pip-tools-managed repos (e.g. jupyterhub,
+# home-assistant's dev tooling) commit both files, with `requirements.in`
+# the one a human (or an LLM coding assistant) actually edits and therefore
+# the one most likely to carry a hallucinated name in the first place.
+# Before this fix, neither `PARSERS` nor `find_manifests` recognized this
+# filename, and unlike ".txt" there was no suffix-fallback either (see
+# `parse_manifest` below) -- so a directory containing only `requirements.in`
+# (a real state: reviewing a change before the compiled `.txt` is
+# regenerated, or a repo that gitignores the compiled artifact) alongside
+# any other supported-but-dependency-free manifest (e.g. a `pyproject.toml`
+# that exists purely for `[tool.ruff]`/`[tool.black]` config) reported "0
+# dependencies checked, all clean" -- the same silent false-all-clear shape
+# already fixed here for Pipfile/setup.cfg/environment.yml, just for this
+# still-unhandled pip-tools filename. Confirmed live: `parse_manifest` on a
+# `requirements.in` naming a hallucinated package raised "don't know how to
+# parse this file" before this fix, and a directory scan alongside a
+# config-only pyproject.toml reported a clean 0-dependency scan with exit
+# code 0.
 PARSERS = {
     "requirements.txt": parse_requirements_txt,
+    "requirements.in": parse_requirements_txt,
     "pyproject.toml": parse_pyproject_toml,
     "package.json": parse_package_json,
     "Pipfile": parse_pipfile,
@@ -1851,27 +1879,30 @@ def parse_manifest(path: Path) -> list[Dependency]:
     parser = PARSERS.get(path.name)
     if parser is None and _PYLOCK_FILENAME_RE.match(path.name):
         parser = parse_pylock_toml
-    if parser is None and path.suffix == ".txt":
-        # `find_manifests` only auto-discovers the exact name "requirements.txt",
-        # but a real pip requirements file is routinely named something else —
-        # pip itself doesn't care about the filename at all, only real-world
-        # convention does. Home Assistant's core repo splits into
-        # requirements_test.txt/requirements_test_pre_commit.txt; cookiecutter-
-        # django splits into requirements/base.txt, local.txt, production.txt.
+    if parser is None and path.suffix in (".txt", ".in"):
+        # `find_manifests` only auto-discovers the exact names "requirements.txt"
+        # and "requirements.in", but a real pip/pip-tools requirements file is
+        # routinely named something else — pip itself doesn't care about the
+        # filename at all, only real-world convention does. Home Assistant's
+        # core repo splits into requirements_test.txt/requirements_test_pre_commit.txt;
+        # cookiecutter-django splits into requirements/base.txt, local.txt,
+        # production.txt; a pip-tools project just as commonly splits into
+        # requirements/base.in, dev.in the same way (see PARSERS' own
+        # "requirements.in" entry above for why `.in` is the identical format).
         # A user pointing slopcheck directly at one of these (a natural thing
         # to do, and exactly how the new `-r`-recursion above resolves nested
         # files too) used to hit `PARSERS[path.name]` -> KeyError, an unhandled
-        # traceback instead of a clean error or a real scan. Any other `.txt`
-        # file is a reasonable enough match for the line-based requirements
-        # format (there's no other `.txt`-suffixed manifest this tool knows
-        # about) to treat the same way rather than crash.
+        # traceback instead of a clean error or a real scan. Any other `.txt`/
+        # `.in` file is a reasonable enough match for the line-based
+        # requirements format (there's no other `.txt`/`.in`-suffixed manifest
+        # this tool knows about) to treat the same way rather than crash.
         parser = parse_requirements_txt
     if parser is None:
         raise ManifestParseError(
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
-            "setup.cfg, pylock.toml, environment.yml/environment.yaml, or a *.txt "
-            "requirements file)"
+            "setup.cfg, pylock.toml, environment.yml/environment.yaml, or a *.txt/"
+            "*.in requirements file)"
         )
     try:
         return parser(path)

@@ -32,6 +32,27 @@ def test_main_exits_nonzero_on_hallucinated_dependency(tmp_path: Path, capsys):
     assert "requests" not in out.split("\n")[1]  # clean dep isn't listed in the flagged rows
 
 
+def test_main_scans_requirements_in_not_just_requirements_txt(tmp_path: Path, capsys):
+    # Before this fix, a directory holding only pip-tools' own
+    # "requirements.in" (its hand-edited source file, compiled into
+    # "requirements.txt" by `pip-compile`) alongside a real but
+    # dependency-free manifest (here, a pyproject.toml that exists purely
+    # for [tool.black] config, a real and common combination) reported "0
+    # dependencies checked, all clean" with exit code 0 -- a silent
+    # false-all-clear even though a hallucinated name sat right there in a
+    # file `pip-compile`/`pip install -r requirements.in` genuinely tries
+    # to resolve.
+    (tmp_path / "requirements.in").write_text("requests\ntotally-made-up-pkg-9000\n")
+    (tmp_path / "pyproject.toml").write_text("[tool.black]\nline-length = 100\n")
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"requests"})}):
+        exit_code = cli.main([str(tmp_path)])
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "totally-made-up-pkg-9000" in out
+
+
 def test_main_exits_zero_when_everything_resolves(tmp_path: Path):
     (tmp_path / "requirements.txt").write_text("requests\n")
 
@@ -546,8 +567,8 @@ def test_help_text_matches_source(capsys):
     assert "('slopsquatted') package names before you install them." in normalized
     assert "Manifest files to check, or directories to search" in normalized
     assert (
-        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg, pylock.toml, "
-        "environment.yml). "
+        "(requirements.txt, requirements.in, pyproject.toml, package.json, Pipfile, setup.cfg, "
+        "pylock.toml, environment.yml). "
         "Defaults to the current directory." in normalized
     )
     assert "Emit machine-readable JSON instead of text." in normalized
@@ -610,8 +631,8 @@ def test_no_manifests_error_message(tmp_path: Path, capsys):
     # from mutmut's "XX...XX"-wrapped version of the same literal, which
     # still contains the real text as a substring.
     assert err == (
-        "slopcheck: no requirements.txt, pyproject.toml, package.json, Pipfile, "
-        "setup.cfg, pylock.toml, or environment.yml found\n"
+        "slopcheck: no requirements.txt, requirements.in, pyproject.toml, package.json, "
+        "Pipfile, setup.cfg, pylock.toml, or environment.yml found\n"
     )
 
 

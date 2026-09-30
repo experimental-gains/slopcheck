@@ -1398,6 +1398,36 @@ def test_parse_manifest_routes_non_canonical_txt_filename_to_requirements_parser
     assert names == {"pytest"}
 
 
+def test_find_manifests_discovers_requirements_in(tmp_path: Path):
+    # pip-tools' own convention: a hand-edited "requirements.in" compiled by
+    # `pip-compile` into "requirements.txt" -- the same requirements-file
+    # syntax, just a different, equally conventional filename `find_manifests`
+    # didn't recognize at all before this fix.
+    (tmp_path / "requirements.in").write_text("requests\n")
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "requirements.in" in found
+
+
+def test_parse_manifest_routes_requirements_in_to_requirements_parser(tmp_path: Path):
+    req = tmp_path / "requirements.in"
+    req.write_text("requests\ntotally-hallucinated-package-xyz-123\n")
+    names = {dep.name for dep in parse_manifest(req)}
+    assert names == {"requests", "totally-hallucinated-package-xyz-123"}
+
+
+def test_parse_manifest_routes_non_canonical_in_filename_to_requirements_parser(tmp_path: Path):
+    # Same "any file with this suffix is real-world routine" gap already
+    # fixed for non-canonical ".txt" names (see the sibling test above) --
+    # pip-tools projects split the same way (e.g. requirements/base.in,
+    # dev.in), and pip-compile's own parser (pip._internal.req.req_file.
+    # parse_requirements, the exact function real pip itself uses) doesn't
+    # care about the filename at all, only this convention does.
+    req = tmp_path / "requirements-dev.in"
+    req.write_text("pytest==8.0.0\n")
+    names = {dep.name for dep in parse_manifest(req)}
+    assert names == {"pytest"}
+
+
 def test_parse_manifest_unknown_extension_raises_clean_manifest_error(tmp_path: Path):
     weird = tmp_path / "notes.md"
     weird.write_text("not a manifest\n")
