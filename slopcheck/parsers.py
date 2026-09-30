@@ -570,6 +570,87 @@ def parse_pipfile(path: Path) -> list[Dependency]:
     return [Dependency(name, "pypi", str(path)) for name in names]
 
 
+def _is_pylock_registry_package(package: dict) -> bool:
+    """Whether a `pylock.toml` `[[packages]]` entry names something pip installs off the index.
+
+    PEP 751 (https://packaging.python.org/en/latest/specifications/pylock-toml/)
+    lets a locked package's actual file(s) come from a version-control checkout
+    (`packages.vcs`) or a local directory (`packages.directory`, how a locked
+    project's own editable/source-tree install is recorded) instead of a
+    downloadable archive — the same non-registry-source situation already
+    handled for Poetry's/uv's/Pipfile's own git/path table forms above.
+    `packages.archive`/`packages.sdist`/`[[packages.wheels]]` all name a
+    downloadable *file* instead, almost always (for a lock file a real locker
+    tool generated) one it already fetched from a real index while resolving
+    the lock, so those are left to the ordinary registry check.
+    """
+    return not any(key in package for key in ("vcs", "directory"))
+
+
+def parse_pylock_toml(path: Path) -> list[Dependency]:
+    """Parse a PEP 751 `pylock.toml`/`pylock.<name>.toml` lock file.
+
+    PEP 751 (accepted 2025) standardizes a lock-file format recording the
+    exact resolved set of packages for reproducible installs, one `[[packages]]`
+    table per package with a required, already PEP-503-normalized `name` key.
+    pip 26.1 (April 2026) shipped real, current — if still explicitly labeled
+    "experimental" — support for installing directly from one via `pip install
+    -r pylock.toml`, an alternative to `-r requirements.txt`; uv/PDM/Pipenv can
+    already export to this format too. Before this fix, neither `PARSERS` nor
+    `find_manifests` recognized this filename at all (and `parse_manifest`'s
+    `.txt`-suffix fallback doesn't apply either, since a lock file is TOML),
+    so a project locked this way had every name in it — the tool's entire job
+    — silently never checked: the same "0 dependencies checked, all clean"
+    false-all-clear already fixed here for `Pipfile`/`setup.cfg`/Hatch/PDM's
+    legacy dev-dependencies table/PEP 735 dependency-groups, just for a format
+    that didn't exist yet when any of those were fixed.
+
+    Confirmed real and live, not hypothetical: generated an actual
+    `pylock.toml` with real pip 26.2.1 (`pip lock -r req.txt -o pylock.toml`
+    against a plain `requests==2.32.3` requirement) and got back exactly the
+    `[[packages]] name = "..." version = "..." [[packages.wheels]] url =
+    "https://files.pythonhosted.org/..."` shape this function reads. Hand-
+    added a `[[packages]]` entry naming a hallucinated package with no
+    `vcs`/`directory`/`archive`/`sdist`/`wheels` at all made real `pip install
+    --dry-run -r` (both the bare `-r pylock.toml` name and the
+    `pylock.<name>.toml` variant PEP 751 also allows) refuse outright with
+    "Invalid pylock file ...: Exactly one of vcs, directory, archive must be
+    set if sdist and wheels are not set" — real pip Fatals before ever
+    resolving anything, so that shape can't reach a false negative here
+    either way. A hallucinated package *with* a fabricated `[[packages.wheels]]`
+    URL, the shape a hand-edited or LLM-authored lock file would actually
+    produce, installs (or 404s) by that literal URL alone, with zero query to
+    PyPI for the name — confirmed live the same way — but that URL is exactly
+    what a real locker tool (`pip lock`, `uv export --format pylock.toml`)
+    only ever writes *after* successfully resolving the name from a real
+    index, so checking the name for existence/recency here is exactly as
+    meaningful as it is for an ordinary `requirements.txt`/`pyproject.toml`
+    entry, catching the same slopsquatting shape further down the pipeline
+    (a lock file pinning a real-but-newly-squatted transitive dependency an
+    LLM suggested, faithfully resolved and hashed in by the locker itself).
+    """
+    data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    deps = []
+    for package in data.get("packages", []):
+        if not isinstance(package, dict):
+            continue
+        name = package.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if not _is_pylock_registry_package(package):
+            continue
+        deps.append(Dependency(name, "pypi", str(path)))
+    return deps
+
+
+# PEP 751's own filename rule: bare "pylock.toml", or "pylock.<name>.toml" for
+# a named/multi-use lock file (e.g. "pylock.dev.toml") -- both forms are real,
+# equally valid targets for `pip install -r`. Checked separately from the
+# plain `PARSERS` dict (`find_manifests`/`parse_manifest` below) since the
+# variable "<name>" segment can't be a literal dict key.
+_PYLOCK_FILENAME_RE = re.compile(r"^pylock\.([^.]+\.)?toml$")
+
+
 def _setup_cfg_list_deps(value: str, path: Path) -> list[Dependency]:
     """Split a setup.cfg list-valued option the same way setuptools itself does.
 
@@ -1474,11 +1555,20 @@ def find_manifests(root: Path) -> list[Path]:
         for filename in PARSERS:
             if filename in filenames:
                 found.append(Path(dirpath) / filename)
+        # `pylock.toml`/`pylock.<name>.toml` (see `_PYLOCK_FILENAME_RE`) can't
+        # be a literal `PARSERS` key, so it needs its own scan of this
+        # directory's actual filenames rather than the dict-key membership
+        # check above.
+        for filename in filenames:
+            if _PYLOCK_FILENAME_RE.match(filename):
+                found.append(Path(dirpath) / filename)
     return found
 
 
 def parse_manifest(path: Path) -> list[Dependency]:
     parser = PARSERS.get(path.name)
+    if parser is None and _PYLOCK_FILENAME_RE.match(path.name):
+        parser = parse_pylock_toml
     if parser is None and path.suffix == ".txt":
         # `find_manifests` only auto-discovers the exact name "requirements.txt",
         # but a real pip requirements file is routinely named something else —
@@ -1498,7 +1588,7 @@ def parse_manifest(path: Path) -> list[Dependency]:
         raise ManifestParseError(
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
-            "setup.cfg, or a *.txt requirements file)"
+            "setup.cfg, pylock.toml, or a *.txt requirements file)"
         )
     try:
         return parser(path)

@@ -517,7 +517,7 @@ def test_help_text_matches_source(capsys):
     assert "('slopsquatted') package names before you install them." in normalized
     assert "Manifest files to check, or directories to search" in normalized
     assert (
-        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg). "
+        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg, pylock.toml). "
         "Defaults to the current directory." in normalized
     )
     assert "Emit machine-readable JSON instead of text." in normalized
@@ -579,7 +579,10 @@ def test_no_manifests_error_message(tmp_path: Path, capsys):
     # Exact match, not `in`: a plain substring check can't distinguish this
     # from mutmut's "XX...XX"-wrapped version of the same literal, which
     # still contains the real text as a substring.
-    assert err == "slopcheck: no requirements.txt, pyproject.toml, package.json, Pipfile, or setup.cfg found\n"
+    assert err == (
+        "slopcheck: no requirements.txt, pyproject.toml, package.json, Pipfile, "
+        "setup.cfg, or pylock.toml found\n"
+    )
 
 
 def test_summary_messages_are_exact(tmp_path: Path, capsys):

@@ -8,6 +8,7 @@ from slopcheck.parsers import (
     parse_manifest,
     parse_package_json,
     parse_pipfile,
+    parse_pylock_toml,
     parse_pyproject_toml,
     parse_requirements_txt,
     parse_setup_cfg,
@@ -1462,6 +1463,115 @@ def test_parse_manifest_routes_pipfile_to_pipfile_parser(tmp_path: Path):
     pipfile = tmp_path / "Pipfile"
     pipfile.write_text('[packages]\nrequests = "*"\n')
     names = {dep.name for dep in parse_manifest(pipfile)}
+    assert names == {"requests"}
+
+
+def test_parse_pylock_toml(tmp_path: Path):
+    # Real-world find: PEP 751's `pylock.toml` (real pip 26.1+ support, `pip
+    # install -r pylock.toml`) had no filename entry in `PARSERS`/
+    # `find_manifests` at all, so a project locked this way was never
+    # scanned. Shape confirmed live: `pip lock -r req.txt -o pylock.toml`
+    # (pip 26.2.1) against a plain `requests==2.32.3` requirement produced
+    # exactly this `[[packages]] name = "..." version = "..."
+    # [[packages.wheels]] url = "https://files.pythonhosted.org/..."` shape.
+    lock = tmp_path / "pylock.toml"
+    lock.write_text(
+        """
+        lock-version = "1.0"
+        created-by = "pip"
+
+        [[packages]]
+        name = "requests"
+        version = "2.32.3"
+
+        [[packages.wheels]]
+        name = "requests-2.32.3-py3-none-any.whl"
+        url = "https://files.pythonhosted.org/packages/f9/9b/requests-2.32.3-py3-none-any.whl"
+
+        [packages.wheels.hashes]
+        sha256 = "70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6"
+
+        [[packages]]
+        name = "totally-hallucinated-pylock-test-xyz-987"
+        version = "1.0.0"
+
+        [[packages.wheels]]
+        name = "totally_hallucinated_pylock_test_xyz_987-1.0.0-py3-none-any.whl"
+        url = "https://files.pythonhosted.org/packages/aa/bb/totally_hallucinated_pylock_test_xyz_987-1.0.0-py3-none-any.whl"
+
+        [packages.wheels.hashes]
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+        """
+    )
+    deps = parse_pylock_toml(lock)
+    names = {dep.name for dep in deps}
+    assert names == {"requests", "totally-hallucinated-pylock-test-xyz-987"}
+    assert all(dep.ecosystem == "pypi" for dep in deps)
+    assert all(dep.source == str(lock) for dep in deps)
+
+
+def test_parse_pylock_toml_skips_vcs_and_directory_sources(tmp_path: Path):
+    # PEP 751 lets a `[[packages]]` entry's actual files come from a VCS
+    # checkout (`packages.vcs`) or a local directory (`packages.directory`,
+    # how a locked project's own editable/source-tree install is recorded)
+    # instead of a downloadable archive/sdist/wheel -- confirmed live that
+    # real pip never queries PyPI for either shape (it clones/reads the local
+    # tree directly), the same non-registry-source situation already handled
+    # for Poetry/uv/Pipfile's own git/path table forms.
+    lock = tmp_path / "pylock.toml"
+    lock.write_text(
+        """
+        lock-version = "1.0"
+        created-by = "pip"
+
+        [[packages]]
+        name = "requests"
+        version = "2.32.3"
+
+        [[packages.wheels]]
+        url = "https://files.pythonhosted.org/packages/f9/9b/requests-2.32.3-py3-none-any.whl"
+
+        [packages.wheels.hashes]
+        sha256 = "70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6"
+
+        [[packages]]
+        name = "internal-git-lib"
+        [packages.vcs]
+        type = "git"
+        url = "https://example.com/internal-git-lib.git"
+
+        [[packages]]
+        name = "internal-editable-project"
+        [packages.directory]
+        path = "."
+        editable = true
+        """
+    )
+    names = {dep.name for dep in parse_pylock_toml(lock)}
+    assert names == {"requests"}
+
+
+def test_find_manifests_discovers_pylock_toml_and_named_variant(tmp_path: Path):
+    (tmp_path / "pylock.toml").write_text('[[packages]]\nname = "requests"\n')
+    named_dir = tmp_path / "sub"
+    named_dir.mkdir()
+    (named_dir / "pylock.dev.toml").write_text('[[packages]]\nname = "flask"\n')
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "pylock.toml" in found
+    assert "pylock.dev.toml" in found
+
+
+def test_parse_manifest_routes_pylock_toml_to_pylock_parser(tmp_path: Path):
+    lock = tmp_path / "pylock.toml"
+    lock.write_text('[[packages]]\nname = "requests"\n')
+    names = {dep.name for dep in parse_manifest(lock)}
+    assert names == {"requests"}
+
+
+def test_parse_manifest_routes_named_pylock_variant_to_pylock_parser(tmp_path: Path):
+    lock = tmp_path / "pylock.ci.toml"
+    lock.write_text('[[packages]]\nname = "requests"\n')
+    names = {dep.name for dep in parse_manifest(lock)}
     assert names == {"requests"}
 
 

@@ -202,7 +202,8 @@ def main(argv: list[str] | None = None) -> int:
         nargs="*",
         type=Path,
         help="Manifest files to check, or directories to search "
-        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg). Defaults to the current directory.",
+        "(requirements.txt, pyproject.toml, package.json, Pipfile, setup.cfg, pylock.toml). "
+        "Defaults to the current directory.",
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of text.")
     parser.add_argument(
@@ -228,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not manifests:
         print(
-            "slopcheck: no requirements.txt, pyproject.toml, package.json, Pipfile, or setup.cfg found",
+            "slopcheck: no requirements.txt, pyproject.toml, package.json, Pipfile, "
+            "setup.cfg, or pylock.toml found",
             file=sys.stderr,
         )
         return 2
