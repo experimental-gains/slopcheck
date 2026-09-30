@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.67
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.68
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.67
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.68
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.67
+    rev: v0.1.68
     hooks:
       - id: slopcheck
 ```
@@ -269,6 +269,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | File | Ecosystem |
 |---|---|
 | `requirements.txt` | PyPI |
+| `requirements.in` (pip-tools) | PyPI |
 | `pyproject.toml` (PEP 621 or Poetry) | PyPI |
 | `Pipfile` (Pipenv) | PyPI |
 | `setup.cfg` (setuptools) | PyPI |
@@ -1174,6 +1175,31 @@ inlined by hand — a bare `-r requirements-dev.txt` line matches neither
 that skip nor the regex (no leading name character), so it was
 silently dropped and the referenced file's dependencies were never
 checked at all.
+
+pip-tools' own `requirements.in` is now recognized as a manifest too
+(fixed in v0.1.68 — earlier versions had no filename entry for it at
+all, and no suffix fallback the way other `.txt` names get). `pip-compile`
+(part of pip-tools) parses `requirements.in` with pip's own
+requirements-file parser — the exact same entry point real pip itself
+uses for a plain `requirements.txt` — so it's genuinely the identical
+format (`-r`/`-c`/`-e`, inline comments, backslash continuations, all of
+it), just under pip-tools' own, equally conventional filename for the
+hand-edited "source" file a human (or an LLM coding assistant) actually
+touches, compiled into the fully-pinned `requirements.txt` this project
+already read. Before this fix, running `slopcheck` against a directory
+containing only a `requirements.in` (a real state — reviewing a change
+before the compiled `.txt` is regenerated, or a repo that doesn't commit
+the compiled artifact) hit the "no manifest found" error, or worse,
+silently reported "0 dependencies checked, all clean" whenever any other
+supported-but-dependency-free manifest (a `pyproject.toml` with only
+`[tool.black]` config, say) happened to sit alongside it — the exact
+same silent false-all-clear shape already fixed here for `Pipfile`/
+`setup.cfg`/`environment.yml`. A non-canonical `.in` filename (e.g.
+`requirements-dev.in`, the pip-tools analog of `requirements_test.txt`)
+is handled the same way `requirements.txt`'s own non-canonical `.txt`
+names already are: works when scanned directly, or reached via
+`-r`-recursion, even though it isn't auto-discovered by a bare directory
+scan.
 
 ## requirements.txt inline comments
 
