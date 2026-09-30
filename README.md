@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.65
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.66
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.65
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.66
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.65
+    rev: v0.1.66
     hooks:
       - id: slopcheck
 ```
@@ -273,6 +273,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | `Pipfile` (Pipenv) | PyPI |
 | `setup.cfg` (setuptools) | PyPI |
 | `pylock.toml`/`pylock.<name>.toml` (PEP 751 lock file) | PyPI |
+| `environment.yml`/`environment.yaml` (conda, `pip:` section only) | PyPI |
 | `package.json` | npm |
 
 ## What it isn't
@@ -1127,6 +1128,30 @@ plain-semver-range dependency on a private, unpublished sibling
 resolved entirely locally, with zero registry requests for that name.
 Before this fix, `pnpm-workspace.yaml` wasn't read at all, so the same
 shape was reported as a plain `not_found` hallucination.
+
+A conda `environment.yml`/`environment.yaml` is now recognized as a
+manifest too (fixed in v0.1.66 — earlier versions had no filename entry
+for either at all). conda's own documented "mixed" format lets a
+top-level `dependencies:` block sequence combine conda-channel packages
+(`python=3.8.5`, `pytorch=1.11.0`, `cudatoolkit=11.3` — not PyPI
+releases, and not checked here) with a nested `pip:` list of ordinary
+PyPI package specs, real and common in ML/data-science repos that need
+a CUDA-specific conda build of a package alongside PyPI-only
+dependencies. Confirmed against a real, currently-used file,
+[`CompVis/latent-diffusion`'s `environment.yaml`](https://github.com/CompVis/latent-diffusion/blob/main/environment.yaml),
+and against conda's own source (`conda/env/installers/pip.py`,
+`install()`): every `pip:` entry is written verbatim into a temporary
+`requirements.txt` and installed via a real `pip install -U -r
+<tmpfile>` subprocess — the exact same install path already handled for
+a standalone `requirements.txt` above (including its `-e`/VCS-URL
+skip), reused here rather than reimplemented. Before this fix, a
+conda-only project's entire PyPI dependency list — hallucinated names
+included — was silently never scanned; running `slopcheck` against a
+directory containing only an `environment.yml`/`environment.yaml` hit
+the "no manifest found" error, or worse, silently reported "0
+dependencies checked, all clean" whenever any other supported-but-
+dependency-free manifest (a `pyproject.toml` with only `[tool.*]`
+config, say) happened to sit alongside it.
 
 ## requirements.txt inline comments
 
