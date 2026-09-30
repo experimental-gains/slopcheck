@@ -22,6 +22,7 @@ import string
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.specifiers import InvalidSpecifier
 
 from slopcheck.parsers import _REQ_LINE_RE
 
@@ -102,7 +103,13 @@ def _requirement_spec(draw) -> str:
 def _assert_name_matches(spec: str) -> None:
     try:
         parsed = Requirement(spec)
-    except InvalidRequirement:
+    except (InvalidRequirement, InvalidSpecifier):
+        # `Requirement.__init__` builds a `SpecifierSet` internally and lets
+        # a malformed specifier's `InvalidSpecifier` propagate unwrapped
+        # instead of re-raising it as `InvalidRequirement` (confirmed live,
+        # packaging 25.0: `Requirement("0===,==")` raises `InvalidSpecifier`,
+        # not `InvalidRequirement`) — treat it the same as any other spec
+        # packaging rejects.
         assume(False)
         return
     if parsed.url is not None:
