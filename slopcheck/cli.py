@@ -143,20 +143,37 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     pdm_blanket = pdm_private_registry_context([p for p in paths if p.name == "pyproject.toml"])
     pypi_explicit_names = poetry_explicit_names | pipfile_explicit_names | uv_explicit_names
     # A `-i`/`--extra-index-url` directive can live in any requirements-format
-    # file pip itself would read for this scan, not just a top-level file
-    # literally named "requirements.txt": `parse_manifest`'s own `.txt`
-    # fallback treats any `*.txt` scan target as requirements-format, and
-    # pip follows `-r`/`--requirement` into files never passed in `paths` at
-    # all (a real, common structure — e.g. a shared `base.txt` carrying the
-    # index directive that per-environment files `-r` into). Confirmed live
-    # with real pip that a directive in either place applies to the whole
-    # install. `requirements_txt_files_touched` walks the same `-r` chain the
+    # file pip (or, for a `.in` file, pip-compile — see `PARSERS`' own
+    # "requirements.in" entry, which reads it through the identical parser)
+    # itself would read for this scan, not just a top-level file literally
+    # named "requirements.txt": `parse_manifest`'s own `.txt`/`.in` fallback
+    # treats any `*.txt`/`*.in` scan target as requirements-format, and pip
+    # follows `-r`/`--requirement` into files never passed in `paths` at all
+    # (a real, common structure — e.g. a shared `base.txt` carrying the index
+    # directive that per-environment files `-r` into). Confirmed live with
+    # real pip that a directive in either place applies to the whole install.
+    # `requirements_txt_files_touched` walks the same `-r` chain the
     # dependency parser already follows, so it finds a directive-only nested
     # file too (one with no dependency lines of its own, so it would never
     # show up as any `Dependency`'s `source`).
+    #
+    # Before this fix, only `.txt`-suffixed paths were scanned here — added
+    # when this function's only requirements-format target was
+    # "requirements.txt" itself, and never revisited when `requirements.in`
+    # (pip-tools' own hand-edited source file, read through the exact same
+    # `parse_requirements_txt`/`_REQ_FILE_RE` directive-following logic this
+    # loop already relies on) was given its own `PARSERS`/`parse_manifest`
+    # entry. `requirements.in` is, if anything, *more* likely than the
+    # compiled `requirements.txt` to carry the actual `-i`/`--extra-index-url`
+    # directive, since it's the file a human edits by hand and `pip-compile`
+    # carries the directive forward into the generated `.txt` from there.
+    # Live-verified: identical content (`-i https://<private-index>/simple`
+    # plus a hallucinated package name with nothing else naming it) reported
+    # `private` when saved as `requirements.txt` but `not_found` when saved
+    # as `requirements.in`, purely because of this suffix check.
     txt_paths: set[Path] = set()
     for p in paths:
-        if p.suffix == ".txt":
+        if p.suffix in (".txt", ".in"):
             txt_paths |= requirements_txt_files_touched(p)
     pip_private = (
         pip_private_index_configured(sorted(txt_paths))

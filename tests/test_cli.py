@@ -312,6 +312,35 @@ def test_pip_private_directive_in_custom_named_txt_file(tmp_path: Path, monkeypa
     assert by_name["acmecorp-internal-widget"] == "private"
 
 
+def test_pip_private_directive_in_requirements_in_file(tmp_path: Path, monkeypatch):
+    # Regression test: `requirements.in` (pip-tools' own hand-edited source
+    # file, compiled into `requirements.txt` by `pip-compile`) is read
+    # through the exact same `parse_requirements_txt`/`_REQ_FILE_RE`
+    # directive-following logic as an ordinary `requirements.txt` — but
+    # `scan()`'s own private-index-directive scan used to only look at
+    # `.txt`-suffixed paths, a filter written back when "requirements.txt"
+    # was the only requirements-format filename this tool recognized and
+    # never revisited once `requirements.in` got its own `PARSERS` entry.
+    # `requirements.in` is, if anything, *more* likely to carry the actual
+    # `-i`/`--extra-index-url` directive than the compiled `.txt`, since it's
+    # the file a human edits by hand. Live-verified: identical content
+    # reported `private` when saved as `requirements.txt` but `not_found`
+    # when saved as `requirements.in`, purely because of the suffix filter.
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    (tmp_path / "requirements.in").write_text(
+        "-i https://pypi.internal.example/simple\nacmecorp-internal-widget\n"
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+
+
 def test_pipfile_scoped_index_downgrades_not_found_to_private(tmp_path: Path):
     # Regression test for a real gap: slopcheck had zero awareness of
     # Pipenv's own `[[source]]`/`index=` private-registry mechanism at all
