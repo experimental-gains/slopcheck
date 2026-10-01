@@ -1867,6 +1867,47 @@ def test_parse_setup_cfg_single_line_semicolon_list(tmp_path: Path):
     }
 
 
+def test_parse_setup_cfg_tab_before_comment_hash_not_stripped(tmp_path: Path):
+    # Real-world find: setuptools' own requirement-string preprocessing
+    # (`setuptools._reqs.parse_strings`, which maps `jaraco.text.drop_comment`
+    # over each already-stripped line before ever constructing a
+    # `packaging.requirements.Requirement` from it -- confirmed by reading
+    # jaraco.text 4.0.0's vendored source, the exact copy setuptools 84.0.0
+    # vendors) does NOT use pip's own "any whitespace before #" comment rule
+    # (`_strip_inline_comment`, which correctly mirrors pip's real
+    # `req_file.COMMENT_RE` for requirements.txt-format files everywhere else
+    # in this module). `drop_comment`'s own implementation is just
+    # `line.partition(' #')[0]`: a single literal space immediately before
+    # `#`, not any whitespace. A trailing comment preceded by a tab (an
+    # ordinary tab-aligned-comment editor habit) doesn't match, so the
+    # "comment" -- `#` and all -- stays glued onto the requirement string in
+    # real setuptools.
+    #
+    # Confirmed live (setuptools 84.0.0, real `python -m build --sdist`
+    # against exactly this setup.cfg): the build Fataled immediately with
+    # `packaging.requirements.InvalidRequirement: Expected semicolon (after
+    # name with no version specifier) or end`, pointing at the
+    # tab-separated comment, before resolving a single dependency -- real or
+    # hallucinated. Before this fix, `_setup_cfg_list_deps` reused
+    # `_strip_inline_comment` (pip's requirements.txt rule, where a tab is
+    # just more whitespace) here, silently stripping the tab-preceded
+    # comment and reporting "requests" as an ordinary, checkable dependency
+    # -- implying this setup.cfg installs cleanly, when a real
+    # `pip install .`/`python -m build` genuinely crashes on it before any
+    # dependency, including the hallucinated one on the next, syntactically
+    # fine line, is ever resolved.
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text(
+        "[options]\n"
+        "install_requires =\n"
+        "\trequests\t# http client\n"
+        "\ttotally-hallucinated-package-xyz-456\n"
+    )
+    names = {dep.name for dep in parse_setup_cfg(cfg)}
+    assert names == {"totally-hallucinated-package-xyz-456"}
+    assert "requests" not in names
+
+
 def test_parse_setup_cfg_install_requires_file_directive(tmp_path: Path):
     # Real-world find: setuptools' actual `install_requires`/
     # `[options.extras_require]` parser (`_parse_requirements_list`, confirmed

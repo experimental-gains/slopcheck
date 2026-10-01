@@ -711,6 +711,49 @@ def parse_pylock_toml(path: Path) -> list[Dependency]:
 _PYLOCK_FILENAME_RE = re.compile(r"^pylock\.([^.]+\.)?toml$")
 
 
+def _setup_cfg_drop_comment(line: str) -> str:
+    """Drop a setup.cfg list value's trailing comment the way setuptools itself does.
+
+    `_strip_inline_comment`/`_INLINE_COMMENT_RE` above correctly mirrors real
+    pip's own requirements.txt comment rule (`req_file.COMMENT_RE = r"(^|\\s+)
+    #.*$"`, confirmed by reading pip 25.x's own source: *any* run of
+    whitespace before `#` starts a comment) — but setuptools' own
+    `install_requires`/`[options.extras_require]`/`setup_requires` list-value
+    preprocessing is a completely different pipeline that happens to look
+    similar: `setuptools._reqs.parse_strings` maps `jaraco.text.drop_comment`
+    over each already-stripped line before ever constructing a
+    `packaging.requirements.Requirement` from it, and `drop_comment`'s own
+    implementation (confirmed by reading jaraco.text 4.0.0's vendored source
+    directly — the exact copy setuptools 84.0.0 vendors) is just
+    `line.partition(' #')[0]`: a single literal space immediately before `#`,
+    not pip's broader "any whitespace" rule. A trailing comment preceded by a
+    tab (a real, plausible shape — tab-aligning trailing comments is an
+    ordinary editor/style habit, and nothing about setup.cfg's INI syntax
+    discourages it) doesn't match `' #'` at all, so the "comment" — `#` and
+    all — stays glued onto the requirement string in real setuptools, headed
+    straight for `packaging.requirements.Requirement()`.
+
+    Confirmed live (setuptools 84.0.0, real `python -m build --sdist` against
+    a from-scratch `setup.cfg` with `install_requires =\\n\\trequests\\t#
+    http client\\n\\ttotally-hallucinated-package-xyz-456`): the build
+    Fataled immediately — `packaging.requirements.InvalidRequirement:
+    Expected semicolon (after name with no version specifier) or end`,
+    pointing at the tab-separated comment — before resolving a single
+    dependency, real or hallucinated. Before this fix, `_setup_cfg_list_deps`
+    reused `_strip_inline_comment` here, which treats a tab exactly like a
+    space (both match `\\s`) and silently stripped the tab-preceded comment,
+    reporting the pre-comment name ("requests") as an ordinary, checkable
+    dependency and implying this setup.cfg installs cleanly — when a real
+    `pip install .`/`python -m build` genuinely crashes on it before any
+    dependency, including a hallucinated one sitting on a syntactically fine
+    neighboring line, is ever resolved. The same "real tool never gets this
+    far, so reporting ok/not_found here is misleading" shape already fixed
+    for this module's `file:`-directive handling, just for a different
+    syntax trap in the same underlying setuptools requirement pipeline.
+    """
+    return line.partition(" #")[0]
+
+
 def _setup_cfg_list_deps(value: str, path: Path) -> list[Dependency]:
     """Split a setup.cfg list-valued option the same way setuptools itself does.
 
@@ -746,7 +789,7 @@ def _setup_cfg_list_deps(value: str, path: Path) -> list[Dependency]:
         line = raw_chunk.strip()
         if not line:
             continue
-        line = _strip_inline_comment(line)
+        line = _setup_cfg_drop_comment(line)
         if not line or "://" in line:
             continue
         match = _REQ_LINE_RE.match(line)
