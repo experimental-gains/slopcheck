@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.73
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.74
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.73
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.74
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.73
+    rev: v0.1.74
     hooks:
       - id: slopcheck
 ```
@@ -1314,6 +1314,22 @@ earlier versions checked for `://` before stripping the comment, so
 any dependency with a URL in its comment was silently skipped instead
 of checked). A genuine direct-URL install (`-e https://...` or
 `name @ https://...`) is still correctly skipped either way.
+
+`setup.cfg`'s `install_requires`/`setup_requires`/`[options.extras_require]`
+(and the `file:`-directive files they can point at) use a *different*,
+stricter comment rule than the one above, matching real setuptools exactly
+rather than pip's: only a trailing comment preceded by a single literal
+space is stripped; one preceded by a tab (an ordinary tab-aligned-comment
+editor habit) is left glued onto the requirement string, since that's what
+real setuptools itself does (`jaraco.text.drop_comment`, confirmed reading
+its vendored source: `line.partition(' #')[0]`) before handing it to
+`packaging.requirements.Requirement()` (fixed in v0.1.74 — earlier versions
+reused the pip-style "any whitespace before `#`" rule here too, so a
+tab-preceded comment was silently stripped and the pre-comment name
+reported as an ordinary, clean dependency, even though a real
+`pip install .`/`python -m build` genuinely Fatals with
+`InvalidRequirement` on that exact line before resolving any dependency at
+all, hallucinated or not).
 
 ## Development
 
