@@ -583,6 +583,66 @@ def test_npmrc_paths_skips_missing_project_root_file_and_checks_home(
     assert scopes == {"@acmecorp"}
 
 
+def test_npm_private_registry_from_workspace_root_npmrc(tmp_path: Path, monkeypatch):
+    """A scan rooted at a single npm workspace *member* directory (e.g. a CI
+    job or pre-commit hook scoped to one changed package) must still see the
+    enclosing workspace root's `.npmrc` — confirmed live (npm 9.2.0): a
+    two-level layout (`root/package.json` with `"workspaces":
+    ["packages/*"]` plus `root/.npmrc` carrying a scope mapping, and
+    `root/packages/foo/package.json` with no `.npmrc` of its own) run from
+    inside `packages/foo` genuinely loaded the root's `.npmrc` as its
+    "project" config (debug log: "found workspace root at .../root" then
+    "config:load:project" reading that directory's `.npmrc`). Before this
+    fix, `_npmrc_paths`/`npm_private_registry_context` only ever looked at
+    the exact directory holding the *scanned* package.json, so this scope
+    mapping was invisible whenever the scan target was the member directory
+    alone, misreporting a genuinely private-only dependency as plain
+    `not_found` instead of downgraded to `private`."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    root = tmp_path / "root"
+    member = root / "packages" / "foo"
+    member.mkdir(parents=True)
+    (root / "package.json").write_text('{"name": "root", "workspaces": ["packages/*"]}')
+    (root / ".npmrc").write_text("@acmecorp:registry=https://npm.internal.example/\n")
+    (member / "package.json").write_text('{"name": "foo", "version": "1.0.0"}')
+
+    blanket, scopes = npm_private_registry_context([member])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_npm_private_registry_ignores_ancestor_npmrc_without_workspaces_match(
+    tmp_path: Path, monkeypatch
+):
+    """The mirror image of the workspace-root fix above: confirmed live that
+    a plain nested package.json with no enclosing `workspaces` field does
+    *not* get this treatment — real npm then treats the nested package.json
+    as its own project root and never reads the parent directory's `.npmrc`
+    at all. Applying the workspace-root walk unconditionally (regardless of
+    an actual `workspaces` pattern match) would risk the opposite bug: wrongly
+    suppressing a genuine hallucination just because an unrelated ancestor
+    directory happens to carry an `.npmrc`."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    root = tmp_path / "root"
+    member = root / "sub"
+    member.mkdir(parents=True)
+    (root / "package.json").write_text('{"name": "root"}')
+    (root / ".npmrc").write_text("@acmecorp:registry=https://npm.internal.example/\n")
+    (member / "package.json").write_text('{"name": "sub", "version": "1.0.0"}')
+
+    blanket, scopes = npm_private_registry_context([member])
+
+    assert blanket is False
+    assert scopes == set()
+
+
 _DEFAULT_GLOBAL_NPMRC_PATHS = [Path("/etc/npmrc"), Path("/usr/local/etc/npmrc")]
 
 
@@ -991,6 +1051,32 @@ def test_yarn_classic_rc_scope_registry(tmp_path: Path, monkeypatch):
     (tmp_path / ".yarnrc").write_text('"@acmecorp:registry" "https://npm.internal.example/"\n')
 
     blanket, scopes = npm_private_registry_context([tmp_path])
+
+    assert blanket is False
+    assert scopes == {"@acmecorp"}
+
+
+def test_yarn_classic_rc_from_workspace_root(tmp_path: Path, monkeypatch):
+    """Same workspace-root gap as `.npmrc` (see
+    `test_npm_private_registry_from_workspace_root_npmrc`), for Yarn
+    Classic's own `.yarnrc` — confirmed live (Yarn Classic 1.22.22):
+    `yarn config get` run from inside a workspace member directory with no
+    `.yarnrc` of its own genuinely walked up to the enclosing workspace
+    root and used the scope mapping found only there (verbose log: checked
+    every ancestor level's `.yarnrc`, found and used the one at the
+    workspace root)."""
+    _clear_registry_env(monkeypatch)
+    monkeypatch.setattr(private_registry.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    root = tmp_path / "root"
+    member = root / "packages" / "foo"
+    member.mkdir(parents=True)
+    (root / "package.json").write_text('{"name": "root", "workspaces": ["packages/*"]}')
+    (root / ".yarnrc").write_text('"@acmecorp:registry" "https://npm.internal.example/"\n')
+    (member / "package.json").write_text('{"name": "foo", "version": "1.0.0"}')
+
+    blanket, scopes = npm_private_registry_context([member])
 
     assert blanket is False
     assert scopes == {"@acmecorp"}

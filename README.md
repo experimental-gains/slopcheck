@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.77
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.78
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.77
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.78
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.77
+    rev: v0.1.78
     hooks:
       - id: slopcheck
 ```
@@ -1315,6 +1315,28 @@ an ordinary dependency of the project — actively misleading, since the
 real tool never gets far enough to resolve (or even attempt to resolve)
 that name at all; the real, actionable problem (the malformed `-r` line
 itself, which breaks the build outright) was never surfaced.
+
+Scanning a single npm/Yarn-Classic workspace *member* directory on its
+own — not the monorepo root, e.g. a CI job or pre-commit hook scoped to
+one changed package — now also checks the enclosing workspace root's
+`.npmrc`/`.yarnrc` (fixed in v0.1.78). Confirmed live (npm 9.2.0, Yarn
+Classic 1.22.22): running `npm install`/`yarn config get` from inside a
+workspace member genuinely loads the workspace root's `.npmrc`/`.yarnrc`
+too — npm's debug log shows `info found workspace root at ...` followed
+by `config:load:project` reading that directory, and Yarn's verbose log
+walks every ancestor checking for `.yarnrc`/`.npmrc` — even though the
+member directory's own `package.json` is the only manifest in scope. A
+plain nested `package.json` with no enclosing `workspaces` field does
+*not* get this treatment (confirmed live the same way: npm then treats
+it as its own independent project root and never reads the parent's
+`.npmrc` at all), so the fix only climbs to an ancestor whose
+`workspaces` glob patterns actually resolve the scanned directory as a
+member. Before this fix, `_npmrc_paths`/`_yarn_classic_rc_paths` only
+ever checked `.npmrc`/`.yarnrc` in the exact directory holding the
+scanned `package.json`, so a dependency a real `npm install`/`yarn
+install` would resolve against the workspace root's configured private
+registry was misreported as a plain `not_found` hallucination instead
+of downgraded to `private`.
 
 ## requirements.txt inline comments
 

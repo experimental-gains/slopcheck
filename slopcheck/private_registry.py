@@ -29,7 +29,7 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
-from .parsers import _normalize_name
+from .parsers import _normalize_name, npm_workspace_root
 
 _PIP_DIRECTIVE_RE = re.compile(r"^(?:-i|--(?:index-url|extra-index-url|pypi-url)\b)")
 
@@ -319,6 +319,16 @@ def _npmrc_paths(project_roots: list[Path]) -> list[Path]:
     # hallucination instead of downgraded to `private`.
     user_config = _env_ci("npm_config_userconfig")
     paths = [root / ".npmrc" for root in project_roots]
+    # A project root that's actually an npm/Yarn-Classic workspace *member*
+    # (not the workspace root itself) reads its enclosing workspace root's
+    # `.npmrc` too — confirmed live, see `npm_workspace_root`'s docstring.
+    # Without this, scanning a workspace member directory on its own (its
+    # own `.npmrc`, if any, already covered by the entry above) never saw
+    # the root's scope/blanket config at all.
+    for root in project_roots:
+        workspace_root = npm_workspace_root(root)
+        if workspace_root is not None:
+            paths.append(workspace_root / ".npmrc")
     paths.append(Path(user_config) if user_config else Path.home() / ".npmrc")
     paths.extend(_npm_global_config_paths())
     return paths
@@ -461,6 +471,23 @@ def _yarn_classic_rc_paths(project_roots: list[Path]) -> list[Path]:
     # The global file's own location isn't always `~/.yarnrc` — see
     # `_yarn_classic_config_home`.
     paths = [root / ".yarnrc" for root in project_roots]
+    # Same workspace-root gap `_npmrc_paths` fixes, for Yarn Classic's own
+    # `.yarnrc` — confirmed live (Yarn Classic 1.22.22): `yarn config get`
+    # run from inside a workspace member directory walked all the way up to
+    # the enclosing workspace root looking for `.yarnrc`/`.npmrc` (verbose
+    # log: "Checking for configuration file" at every ancestor level) and
+    # genuinely used a `registry`/scope directive found only there, with no
+    # `.yarnrc` of its own in the member directory at all. `npm_workspace_root`
+    # is reused rather than a from-scratch unconditional ancestor walk (real
+    # Yarn Classic's own walk isn't gated on a `workspaces` field match at
+    # all) to keep this to the specific, common monorepo shape already
+    # confirmed rather than risk a false `private` downgrade from an
+    # unrelated `.yarnrc` sitting somewhere above an ordinary, non-workspace
+    # nested project.
+    for root in project_roots:
+        workspace_root = npm_workspace_root(root)
+        if workspace_root is not None:
+            paths.append(workspace_root / ".yarnrc")
     paths.append(_yarn_classic_config_home() / ".yarnrc")
     return paths
 

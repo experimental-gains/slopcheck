@@ -1684,6 +1684,71 @@ def _workspace_member_names_from_patterns(root: Path, patterns: list[str]) -> se
     return names
 
 
+def _workspace_patterns_include_dir(root: Path, patterns: list[str], target: Path) -> bool:
+    """True if one of `patterns` (rooted at `root`) resolves to exactly `target`."""
+    for pattern in patterns:
+        glob_pattern = pattern.removeprefix("!")
+        try:
+            matches = root.glob(glob_pattern)
+        except (ValueError, NotImplementedError):
+            continue
+        for member_dir in matches:
+            try:
+                if member_dir.resolve() == target:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def npm_workspace_root(start: Path) -> Path | None:
+    """Find the nearest ancestor directory whose package.json claims `start` as a workspace member.
+
+    npm resolves its own per-project `.npmrc` relative to the *workspace
+    root*, not necessarily the cwd's own package.json directory, once `start`
+    sits inside an npm (or Yarn Classic) workspace — confirmed live (npm
+    9.2.0): a two-level layout (`root/package.json` with `"workspaces":
+    ["packages/*"]` plus `root/.npmrc` carrying a `@acmetest:registry=...`
+    scope mapping, and `root/packages/foo/package.json` with *no* `.npmrc`
+    of its own) ran `npm install --loglevel verbose` from inside
+    `packages/foo` and the debug log showed `info found workspace root at
+    .../root` followed by `config:load:project` loading *that* directory's
+    `.npmrc` — genuinely applying the root's scope mapping to a dependency
+    declared only in the member's own package.json. A plain nested
+    package.json with no enclosing `workspaces` field does *not* get this
+    treatment (confirmed live the same way): npm then treats the nested
+    package.json as its own project root and never reads the parent
+    directory's `.npmrc` at all, so this only returns an ancestor whose
+    `workspaces` patterns actually resolve to `start` as a member -- not
+    just the nearest ancestor containing a package.json.
+
+    Before this fix, slopcheck's private-registry detection only ever
+    checked `.npmrc` in the exact directory holding each *scanned*
+    package.json (see `_npmrc_paths`). Scanning a workspace member directory
+    on its own -- a realistic shape, e.g. a CI job or pre-commit hook scoped
+    to one changed package -- never saw the workspace root's `.npmrc` at
+    all (it isn't even among the scanned manifests), so a dependency a real
+    `npm install` would resolve against the configured private registry was
+    misreported as a plain `not_found` hallucination instead of downgraded
+    to `private`.
+    """
+    start_resolved = start.resolve()
+    for ancestor in start_resolved.parents:
+        pkg = ancestor / "package.json"
+        if not pkg.is_file():
+            continue
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        patterns = _npm_workspace_patterns(data)
+        if not patterns:
+            continue
+        if _workspace_patterns_include_dir(ancestor, patterns, start_resolved):
+            return ancestor
+    return None
+
+
 _PNPM_WORKSPACE_TOP_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+):\s*(.*)$")
 _PNPM_WORKSPACE_LIST_ITEM_RE = re.compile(r"^-\s*(.*)$")
 

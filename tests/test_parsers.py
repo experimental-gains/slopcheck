@@ -5,6 +5,7 @@ from slopcheck.parsers import (
     ManifestParseError,
     find_manifests,
     npm_workspace_member_names,
+    npm_workspace_root,
     parse_environment_yml,
     parse_manifest,
     parse_package_json,
@@ -205,6 +206,47 @@ def test_npm_workspace_member_names_ignores_non_workspace_package_json(tmp_path:
     plain.write_text(json.dumps({"dependencies": {"left-pad": "^1.0.0"}}))
 
     assert npm_workspace_member_names([plain]) == []
+
+
+def test_npm_workspace_root_finds_ancestor_with_matching_workspaces_pattern(tmp_path: Path):
+    # Regression test for a real-world find: confirmed live (npm 9.2.0) that
+    # `.npmrc` resolution for a workspace *member* directory walks up to the
+    # enclosing workspace root (debug log: "found workspace root at ...")
+    # rather than stopping at the member's own package.json -- see
+    # `npm_workspace_root`'s docstring for the full live repro. This matters
+    # for slopcheck because the real scan is sometimes rooted at just the
+    # member directory, and the workspace root's package.json never shows up
+    # among the scanned manifests at all in that case.
+    root = tmp_path / "root"
+    member = root / "packages" / "foo"
+    member.mkdir(parents=True)
+    (root / "package.json").write_text(json.dumps({"name": "root", "workspaces": ["packages/*"]}))
+    (member / "package.json").write_text(json.dumps({"name": "foo"}))
+
+    assert npm_workspace_root(member) == root
+
+
+def test_npm_workspace_root_none_without_workspaces_field(tmp_path: Path):
+    # The mirror image: confirmed live that a plain nested package.json with
+    # no enclosing `workspaces` field does *not* get this treatment -- real
+    # npm treats the nested package.json as its own project root. Matching
+    # on a mere ancestor package.json's *presence*, without checking its
+    # `workspaces` patterns actually resolve to the start directory, would
+    # risk wrongly suppressing a genuine hallucination elsewhere.
+    root = tmp_path / "root"
+    member = root / "sub"
+    member.mkdir(parents=True)
+    (root / "package.json").write_text(json.dumps({"name": "root"}))
+    (member / "package.json").write_text(json.dumps({"name": "sub"}))
+
+    assert npm_workspace_root(member) is None
+
+
+def test_npm_workspace_root_none_with_no_ancestor_package_json(tmp_path: Path):
+    nested = tmp_path / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+
+    assert npm_workspace_root(nested) is None
 
 
 def test_pnpm_workspace_member_names_from_separate_yaml_file(tmp_path: Path):
