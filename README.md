@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.71
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.72
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.71
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.72
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.71
+    rev: v0.1.72
     hooks:
       - id: slopcheck
 ```
@@ -1250,6 +1250,27 @@ name from PyPI ("Could not find a version that satisfies the
 requirement ... (from versions: none)"). Before this fix, `_hatch_deps`
 only ever read `dependencies`, so this sibling field on the same table
 was silently never checked at all.
+
+A `-i`/`--extra-index-url`/`--index-url` directive placed directly in a
+conda `environment.yml`/`environment.yaml`'s own `pip:` block is now
+honored too (fixed in v0.1.72). Confirmed reading conda's own
+`conda/env/installers/pip.py` `install()` directly (github.com/conda/conda's
+`main` branch): every `pip:` entry is written *verbatim* — no filtering of
+any kind — into a temp requirements file, which a real `pip install -U -r
+<tmpfile> --exists-action=b` subprocess then reads, so a directive sitting
+in that list is exactly as effective as the same line at the top of a
+standalone `requirements.txt` (live-verified separately with real pip: a
+requirements file whose first line is `-i http://<private-index>/simple`
+genuinely directs pip's lookup there instead of PyPI). Before this fix, the
+private-index scan only ever read `.txt`/`.in`-suffixed file *paths* —
+environment.yml's own YAML body was never one of those paths, so a
+directive living inline in its `pip:` block (or reached indirectly via a
+nested `-r other.txt` line inside that same block) was invisible to it no
+matter how that suffix filter was widened. Live-verified: identical content
+(the same directive plus the same hallucinated name) was correctly
+downgraded to `private` when saved as `requirements.txt`, but reported as a
+plain `not_found` hallucination when saved inline in an environment.yml
+`pip:` block.
 
 ## requirements.txt inline comments
 
