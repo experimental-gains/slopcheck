@@ -1875,6 +1875,64 @@ def parse_environment_yml(path: Path) -> list[Dependency]:
     return deps
 
 
+def environment_yml_pip_lines(path: Path) -> list[str]:
+    """The raw `pip:`-block line strings from a conda environment.yml, for private-index detection.
+
+    `parse_environment_yml` already extracts these same lines to find
+    dependency *names*; exposed here too so
+    `private_registry.pip_private_index_configured` can scan the identical
+    lines for a `-i`/`--extra-index-url`/`--index-url` directive. Confirmed
+    directly from conda's own current `conda/env/installers/pip.py`
+    (`install()`, read off github.com/conda/conda's `main` branch): every
+    `pip:` entry is joined with `"\\n".join(specs)` and written *verbatim*,
+    with no filtering of any kind, into a temp requirements file that a real
+    `pip install -U -r <tmpfile> --exists-action=b` subprocess then reads —
+    so a `-i`/`--extra-index-url` line sitting directly in the `pip:` list is
+    exactly as effective as the same line at the top of a standalone
+    `requirements.txt` (confirmed live with real pip 25.1.1: a requirements
+    file whose first line is `-i http://<private-index>/simple` genuinely
+    directs pip's lookup there). Before this fix, `pip_private_index_
+    configured` only ever read file paths with a `.txt`/`.in` suffix
+    (see `cli.scan`) — environment.yml's own YAML body was never one of
+    those paths, so a directive living inline in its `pip:` block, as
+    opposed to one living in a file reached via a nested `-r` target (see
+    `environment_yml_files_touched` for that sibling case), was invisible to
+    this scan no matter what. A private-only dependency named alongside such
+    a directive was reported as a plain `not_found` hallucination instead of
+    downgraded to `private`, even though real `conda env create` would
+    genuinely resolve it from the configured index.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        raise ManifestParseError(f"{path}: couldn't read ({e})") from e
+    return _environment_yml_pip_requirement_lines(text)
+
+
+def environment_yml_files_touched(path: Path) -> set[Path]:
+    """Every requirements-format file reachable from environment.yml's `pip:` block via `-r`/`--requirement`.
+
+    Mirrors `requirements_txt_files_touched`'s job for a standalone
+    requirements.txt: a `-i`/`--extra-index-url` directive pip would honor
+    for this scan can live in a *nested* file the `pip:` block's own `-r
+    base.txt` line pulls in, not just inline in the block itself
+    (`environment_yml_pip_lines` covers the inline case). Does not include
+    `path` itself in the returned set — unlike a standalone requirements.txt,
+    environment.yml's own YAML body is never handed to pip as a file path at
+    all (conda extracts and rewrites its `pip:` list into a separate temp
+    file first), so there's no sense in which environment.yml's own path is
+    itself one of "the files pip reads."
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        raise ManifestParseError(f"{path}: couldn't read ({e})") from e
+    _deps, touched = _parse_requirement_lines(
+        _environment_yml_pip_requirement_lines(text), path.parent, str(path), set()
+    )
+    return touched
+
+
 def _parse_pnpm_workspace_yaml(path: Path) -> list[Dependency]:
     """`pnpm-workspace.yaml` declares no dependencies of its own -- it's a
     workspace-membership file, not a manifest (see `pnpm_workspace_member_names`)

@@ -10,6 +10,8 @@ from .parsers import (
     Dependency,
     ManifestParseError,
     _normalize_name,
+    environment_yml_files_touched,
+    environment_yml_pip_lines,
     find_manifests,
     npm_workspace_member_names,
     parse_manifest,
@@ -199,8 +201,29 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     for p in paths:
         if p.suffix in (".txt", ".in"):
             txt_paths |= requirements_txt_files_touched(p)
+
+    # conda's `environment.yml`/`environment.yaml` carries its own `pip:`
+    # block of real pip-directive-bearing requirement lines (see
+    # `environment_yml_pip_lines`'s docstring — conda writes this list
+    # verbatim into a temp requirements file for a real `pip install -r`
+    # subprocess), but it's embedded inside a YAML file's body rather than
+    # living at its own `.txt`/`.in` path, so the suffix-based loop above
+    # can never see it no matter how it's widened. Before this fix, a
+    # `-i`/`--extra-index-url` directive sitting directly in an
+    # environment.yml's `pip:` list was invisible to this scan entirely —
+    # confirmed live, identical content reported `private` as a plain
+    # requirements.txt but `not_found` as environment.yml's `pip:` block.
+    # `environment_yml_files_touched` covers the sibling case where that
+    # same block instead reaches the directive indirectly via its own
+    # nested `-r other.txt` line.
+    env_pip_lines: list[str] = []
+    for p in paths:
+        if p.name in ("environment.yml", "environment.yaml") and p.is_file():
+            env_pip_lines.extend(environment_yml_pip_lines(p))
+            txt_paths |= environment_yml_files_touched(p)
+
     pip_private = (
-        pip_private_index_configured(sorted(txt_paths))
+        pip_private_index_configured(sorted(txt_paths), env_pip_lines)
         or poetry_blanket
         or pipfile_blanket
         or uv_blanket

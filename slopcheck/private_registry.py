@@ -21,6 +21,7 @@ import configparser
 import os
 import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 try:
@@ -216,7 +217,9 @@ def _pip_config_has_extra_index() -> bool:
     return False
 
 
-def pip_private_index_configured(requirements_txt_paths: list[Path]) -> bool:
+def pip_private_index_configured(
+    requirements_txt_paths: list[Path], extra_lines: Sequence[str] = ()
+) -> bool:
     """Whether pip, run for real, would consult something beyond public PyPI.
 
     Unlike GOPRIVATE, pip's extra/alternate index isn't scoped to specific
@@ -240,6 +243,15 @@ def pip_private_index_configured(requirements_txt_paths: list[Path]) -> bool:
     names were already being read correctly (parsers.py has used
     "utf-8-sig" for exactly this reason since the BOM fix documented
     above it).
+
+    `extra_lines` scans a set of already-read line strings the same way, in
+    addition to `requirements_txt_paths`' own files. Needed for conda's
+    `environment.yml`: its `pip:` block is a real, pip-directive-bearing
+    requirement list (see `parsers.environment_yml_pip_lines`'s docstring —
+    conda writes it verbatim into a temp requirements file for a real `pip
+    install -r` subprocess), but it lives inside a YAML file's body, not as
+    its own `.txt`/`.in` path this function could just read directly the way
+    it does for every other source here.
     """
     if os.environ.get("PIP_EXTRA_INDEX_URL") or os.environ.get("PIP_INDEX_URL"):
         return True
@@ -251,6 +263,9 @@ def pip_private_index_configured(requirements_txt_paths: list[Path]) -> bool:
         for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
             if _PIP_DIRECTIVE_RE.match(raw_line.strip()):
                 return True
+    for raw_line in extra_lines:
+        if _PIP_DIRECTIVE_RE.match(raw_line.strip()):
+            return True
     return False
 
 

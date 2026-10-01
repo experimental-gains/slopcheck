@@ -341,6 +341,85 @@ def test_pip_private_directive_in_requirements_in_file(tmp_path: Path, monkeypat
     assert by_name["acmecorp-internal-widget"] == "private"
 
 
+def test_pip_private_directive_inline_in_environment_yml_pip_block(tmp_path: Path, monkeypatch):
+    # Regression test for a real gap: conda's own `conda/env/installers/
+    # pip.py` `install()` writes the `environment.yml`/`environment.yaml`
+    # `pip:` list *verbatim* (confirmed reading that source directly off
+    # github.com/conda/conda's `main` branch -- `requirements.write("\n".join(
+    # specs))`, no filtering at all) into a temp requirements file, then runs
+    # a real `pip install -U -r <tmpfile>` subprocess against it -- so a
+    # `-i`/`--extra-index-url` line sitting directly in the `pip:` list is
+    # exactly as effective as the same line at the top of a standalone
+    # requirements.txt (live-verified separately with real pip 25.1.1: a
+    # requirements file whose first line is `-i http://<private-index>/simple`
+    # genuinely directs pip's lookup there instead of PyPI). `scan()`'s
+    # private-index-directive scan only ever read `.txt`/`.in`-suffixed file
+    # *paths* -- environment.yml's own YAML body was never one of those
+    # paths, so this directive was invisible to it no matter how that suffix
+    # filter was widened. Live-verified: identical content (the same
+    # directive plus the same hallucinated name) reported `private` when
+    # saved as `requirements.txt` but `not_found` when saved inline in an
+    # environment.yml `pip:` block.
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    (tmp_path / "environment.yml").write_text(
+        "\n".join(
+            [
+                "name: privatetest",
+                "dependencies:",
+                "  - python=3.11",
+                "  - pip",
+                "  - pip:",
+                "    - -i https://pypi.internal.example/simple",
+                "    - acmecorp-internal-widget",
+            ]
+        )
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+
+
+def test_pip_private_directive_in_nested_r_file_reached_from_environment_yml(tmp_path: Path, monkeypatch):
+    # Sibling case to the inline test above: the `pip:` block's own `-r
+    # base.txt` line (recognized by `_parse_requirement_lines`, the same
+    # shared logic a standalone requirements.txt uses) can reach the
+    # directive indirectly through a nested file instead of carrying it
+    # inline. `base.txt` has no dependency lines of its own here, so it
+    # never shows up as any `Dependency`'s `source` -- the only way to find
+    # its directive is to actually walk the `-r` chain starting from
+    # environment.yml's own `pip:` block, via `environment_yml_files_touched`.
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    (tmp_path / "base.txt").write_text("--extra-index-url https://pypi.internal.example/simple\n")
+    (tmp_path / "environment.yml").write_text(
+        "\n".join(
+            [
+                "name: nestedprivatetest",
+                "dependencies:",
+                "  - python=3.11",
+                "  - pip",
+                "  - pip:",
+                "    - -r base.txt",
+                "    - acmecorp-internal-widget",
+            ]
+        )
+    )
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name["acmecorp-internal-widget"] == "private"
+
+
 def test_pipfile_scoped_index_downgrades_not_found_to_private(tmp_path: Path):
     # Regression test for a real gap: slopcheck had zero awareness of
     # Pipenv's own `[[source]]`/`index=` private-registry mechanism at all
