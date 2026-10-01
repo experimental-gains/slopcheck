@@ -396,6 +396,36 @@ def test_parse_package_json_skips_gist_shorthand(tmp_path: Path):
     assert names == {"react"}
 
 
+def test_parse_package_json_skips_exec_protocol(tmp_path: Path):
+    # Yarn Berry's own "exec:" protocol (https://yarnpkg.com/features/protocols#exec)
+    # builds a package on the fly from a local script instead of fetching it
+    # from any registry. A real descriptor is just a relative path to that
+    # script and, unlike the git-host shorthand forms above, needs no "/" at
+    # all when the script sits right next to package.json -- so the
+    # slash-based fallback that catches github:/gitlab:/bitbucket: shorthand
+    # never fires for it. Confirmed live (Yarn Berry 4.18.1, `yarn install`,
+    # scripts enabled): a scratch package.json with a sibling `builder.js`
+    # and `"totally-hallucinated-execprotocol-xyz-556": "exec:builder.js"`
+    # failed resolution with "...@exec:builder.js...: Manifest not found" --
+    # a purely local-filesystem error raised before Yarn's install even
+    # reaches its Fetch step -- and made zero requests to
+    # registry.yarnpkg.com/registry.npmjs.org for that name.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "exec-dep": "exec:builder.js",
+                    "exec-dep-with-slash": "exec:./scripts/builder.js",
+                    "react": "^19.0.0",
+                }
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"react"}
+
+
 def test_parse_package_json_skips_bare_dot_local_path(tmp_path: Path):
     # npm-package-arg's own resolve() (read directly from
     # /usr/share/nodejs/npm-package-arg/lib/npa.js on this box) checks a

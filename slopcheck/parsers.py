@@ -1316,7 +1316,38 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
 # and never contact the npm registry for that name at all, regardless of
 # whether the gist exists — the exact same false-positive shape already
 # fixed for "github:"/"gitlab:"/"bitbucket:"/bare shorthand.
-_NON_REGISTRY_PREFIXES = ("workspace:", "file:", "link:", "portal:", "git:", "git+", "github:", "gist:")
+#
+# "exec:" is Yarn Berry's own protocol (https://yarnpkg.com/features/protocols#exec)
+# for building a package on the fly from a local script instead of fetching
+# it from any registry — real, current usage (Yarn's own docs example:
+# generating a virtual package from a build step) writes a descriptor that's
+# just a relative path to that script, with no requirement that the path
+# contain a "/" at all when the script sits next to package.json itself (a
+# bare filename, e.g. "exec:builder.js", is syntactically valid — unlike the
+# git-host shorthand forms above, there's no slash-bearing fallback to catch
+# this one). Confirmed live (Yarn Berry 4.18.1, `yarn install`, scripts
+# enabled): a scratch package.json with `"totally-hallucinated-execprotocol-
+# xyz-556": "exec:builder.js"` (a sibling `builder.js` present) failed
+# resolution with `totally-hallucinated-execprotocol-xyz-556@exec:builder.js
+# ...: Manifest not found` — a purely local-filesystem error raised during
+# the Resolution step, before Yarn's own install even reaches its Fetch step
+# — and made zero requests to `registry.yarnpkg.com`/`registry.npmjs.org`
+# for that name. Before this fix, `_npm_non_registry_version("exec:builder.js")`
+# returned `False` (no recognized prefix, no "/", doesn't start with "." or
+# a drive letter), so slopcheck sent the name to the public registry and
+# would report it a plain `not_found` hallucination — a false positive on a
+# dependency a real `yarn install` never asks the registry about at all.
+_NON_REGISTRY_PREFIXES = (
+    "workspace:",
+    "file:",
+    "link:",
+    "portal:",
+    "git:",
+    "git+",
+    "github:",
+    "gist:",
+    "exec:",
+)
 
 _NPM_ALIAS_PREFIX = "npm:"
 
