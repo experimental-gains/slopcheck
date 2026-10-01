@@ -640,11 +640,46 @@ def _is_pylock_registry_package(package: dict) -> bool:
     downloadable archive — the same non-registry-source situation already
     handled for Poetry's/uv's/Pipfile's own git/path table forms above.
     `packages.archive`/`packages.sdist`/`[[packages.wheels]]` all name a
-    downloadable *file* instead, almost always (for a lock file a real locker
-    tool generated) one it already fetched from a real index while resolving
-    the lock, so those are left to the ordinary registry check.
+    downloadable *file*, but per PEP 751's own schema each of those three
+    sub-tables resolves that file via *either* a `url` key *or* a `path` key
+    (the spec: "If a relative path is used it MUST be relative to the
+    location of this file") — `path` is a local filesystem reference, not a
+    downloadable one, used for a package whose actual file lives on disk
+    next to the lock file rather than on an index.
+
+    Confirmed live (uv 0.12.19, no mocking): built a real wheel for a
+    never-published package, referenced it from `[tool.uv.sources]` via a
+    *file* path (`{ path = "../dist/<name>-0.1.0-py3-none-any.whl" }` —
+    distinct from `directory`, which points at a source *tree*), then ran
+    `uv export --format pylock.toml`. uv never issued a single PyPI request
+    for that name (there's nothing to resolve — the exact file is already
+    named) and wrote `[[packages]] archive = { path = "../dist/...", hashes
+    = {...} }` with no `url` key anywhere in the entry at all. Before this
+    fix, `_is_pylock_registry_package` only excluded `vcs`/`directory`, so
+    this shape — archive/sdist/wheels present but url-less — was still sent
+    to the PyPI existence check and flagged `not_found`, a false
+    "hallucinated" positive on a legitimately local-only package the real
+    locker tool never queried the registry for, the identical bug shape
+    already fixed for Poetry's/uv's/Pipfile's git/path dependency tables,
+    just for pylock.toml's own, independently-shaped archive/sdist/wheels
+    url-vs-path split.
+
+    A package is still registry-resolved if *any* of its archive/sdist/
+    wheels sub-tables carries a `url` (mirrors this module's existing
+    multiple-constraints bias, e.g. `_is_poetry_registry_dep`'s list form:
+    treat a name as still-checkable if any one of its sources is
+    registry-backed) — a real locker only ever omits `url` from *every*
+    file for a genuinely local-only resolution; a mixed index/local
+    reference isn't a shape any real locker produces, but erring toward
+    "still check it" for that theoretical mix avoids a false negative.
     """
-    return not any(key in package for key in ("vcs", "directory"))
+    if any(key in package for key in ("vcs", "directory")):
+        return False
+    sources = [package.get("archive"), package.get("sdist"), *package.get("wheels", [])]
+    sources = [s for s in sources if isinstance(s, dict)]
+    if not sources:
+        return True
+    return any("url" in s for s in sources)
 
 
 def parse_pylock_toml(path: Path) -> list[Dependency]:

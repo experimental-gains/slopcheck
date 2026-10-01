@@ -1781,6 +1781,61 @@ def test_parse_pylock_toml_skips_vcs_and_directory_sources(tmp_path: Path):
     assert names == {"requests"}
 
 
+def test_parse_pylock_toml_skips_path_only_archive_sdist_and_wheels(tmp_path: Path):
+    # Real-world find: a `packages.archive`/`packages.sdist`/
+    # `[[packages.wheels]]` entry resolves its actual file via *either* a
+    # `url` key *or* a `path` key (PEP 751's own schema) -- `path` is a
+    # local filesystem reference, not a downloadable one. Confirmed live
+    # (uv 0.12.19): a dependency pinned via `[tool.uv.sources]`'s file-path
+    # form (`{ path = "../dist/<name>-0.1.0-py3-none-any.whl" }`, naming one
+    # exact local wheel rather than a source directory) made `uv export
+    # --format pylock.toml` write `archive = { path = "...", hashes = {...} }`
+    # with no `url` anywhere in the entry -- uv never queried PyPI for that
+    # name. Before this fix, only `vcs`/`directory` opted a `[[packages]]`
+    # entry out of the registry check, so this url-less archive/sdist/wheels
+    # shape was still checked against PyPI and flagged `not_found` for a
+    # genuinely local-only, never-published package.
+    lock = tmp_path / "pylock.toml"
+    lock.write_text(
+        """
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "requests"
+        version = "2.32.3"
+
+        [[packages.wheels]]
+        url = "https://files.pythonhosted.org/packages/f9/9b/requests-2.32.3-py3-none-any.whl"
+
+        [packages.wheels.hashes]
+        sha256 = "70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6"
+
+        [[packages]]
+        name = "local-archive-only-pkg"
+        version = "0.1.0"
+        archive = { path = "../dist/local-archive-only-pkg-0.1.0.tar.gz", hashes = { sha256 = "0" } }
+
+        [[packages]]
+        name = "local-sdist-only-pkg"
+        version = "0.1.0"
+        sdist = { path = "../dist/local-sdist-only-pkg-0.1.0.tar.gz", hashes = { sha256 = "0" } }
+
+        [[packages]]
+        name = "local-wheel-only-pkg"
+        version = "0.1.0"
+
+        [[packages.wheels]]
+        path = "../dist/local_wheel_only_pkg-0.1.0-py3-none-any.whl"
+
+        [packages.wheels.hashes]
+        sha256 = "0"
+        """
+    )
+    names = {dep.name for dep in parse_pylock_toml(lock)}
+    assert names == {"requests"}
+
+
 def test_find_manifests_discovers_pylock_toml_and_named_variant(tmp_path: Path):
     (tmp_path / "pylock.toml").write_text('[[packages]]\nname = "requests"\n')
     named_dir = tmp_path / "sub"
