@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.76
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.77
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.76
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.77
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.76
+    rev: v0.1.77
     hooks:
       - id: slopcheck
 ```
@@ -1365,6 +1365,25 @@ in the entry — uv never queried PyPI for that name — while the pre-fix
 parser still sent it to the registry check and reported it `not_found`, a
 false "hallucinated" positive on a package no real locker tool ever
 resolved from the index.
+
+Yarn Berry's own `exec:` protocol (https://yarnpkg.com/features/protocols#exec)
+is now recognized as a non-registry dependency source too (fixed in
+v0.1.77). It builds a `package.json` dependency on the fly from a local
+script instead of fetching it from any registry — a real descriptor is
+just a relative path to that script, and unlike the `github:`/`gitlab:`/
+`bitbucket:` shorthand forms already handled, it needs no `/` anywhere
+when the script sits right next to `package.json` itself (a bare filename
+like `exec:builder.js` is syntactically valid), so the existing
+slash-based fallback never caught it. Confirmed live (Yarn Berry 4.18.1,
+`yarn install` with scripts enabled): a scratch `package.json` with a
+sibling `builder.js` and `"totally-hallucinated-execprotocol-xyz-556":
+"exec:builder.js"` failed resolution with `...@exec:builder.js...:
+Manifest not found` — a purely local-filesystem error raised before
+Yarn's install ever reaches its Fetch step — and made zero requests to
+`registry.yarnpkg.com`/`registry.npmjs.org` for that name. Before this
+fix, slopcheck sent the literal name to the npm registry and reported it
+a plain `not_found` hallucination — a false positive on a dependency a
+real `yarn install` never asks the registry about at all.
 
 ## Development
 
