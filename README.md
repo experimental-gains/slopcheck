@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.72
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.73
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.72
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.73
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.72
+    rev: v0.1.73
     hooks:
       - id: slopcheck
 ```
@@ -1271,6 +1271,29 @@ matter how that suffix filter was widened. Live-verified: identical content
 downgraded to `private` when saved as `requirements.txt`, but reported as a
 plain `not_found` hallucination when saved inline in an environment.yml
 `pip:` block.
+
+A `-r`/`-i`/`-e`/`-c` pip-style directive line inside a `setup.cfg`/PEP 621
+`file:`-referenced requirements file is no longer followed or treated as a
+dependency (fixed in v0.1.73). setuptools' own `file:` directive
+(confirmed reading setuptools 84.0.0's `setupcfg.py`/`pyprojecttoml.py`)
+is *not* a real pip requirements-file reader: it reads the referenced
+file's raw text and splits it on newline/`;` exactly like a plain,
+non-`file:` list value — there's no `-r` recursion step, and a `-i`/`-e`/
+`-c` line isn't skipped as a directive, it's kept as a literal string and
+handed straight to `packaging.requirements.Requirement()` at build time.
+Live-verified: a real `pip install .`/`python -m build` against a
+`setup.cfg` (or a PEP 621 `[tool.setuptools.dynamic]` equivalent) whose
+`file:`-referenced requirements file contains `-r other.txt` Fatals
+immediately with `InvalidRequirement: Expected package name at the start
+of dependency specifier`, before a single dependency — including an
+innocent sibling requirement on the next line, or anything in the
+referenced `-r` target — is ever resolved. Before this fix, the `file:`
+target was read with the real pip requirements-file parser, which
+genuinely follows a `-r other.txt` line and reports whatever's in there as
+an ordinary dependency of the project — actively misleading, since the
+real tool never gets far enough to resolve (or even attempt to resolve)
+that name at all; the real, actionable problem (the malformed `-r` line
+itself, which breaks the build outright) was never surfaced.
 
 ## requirements.txt inline comments
 
