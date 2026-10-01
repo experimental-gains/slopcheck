@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.74
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.75
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.74
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.75
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.74
+    rev: v0.1.75
     hooks:
       - id: slopcheck
 ```
@@ -1129,6 +1129,27 @@ plain-semver-range dependency on a private, unpublished sibling
 resolved entirely locally, with zero registry requests for that name.
 Before this fix, `pnpm-workspace.yaml` wasn't read at all, so the same
 shape was reported as a plain `not_found` hallucination.
+
+pnpm's `overrides` field (https://pnpm.io/settings/dependency-resolution#overrides)
+is now also recognized when it's set directly in `pnpm-workspace.yaml`
+(fixed in v0.1.75) — not just under `package.json`'s `pnpm.overrides`,
+already handled above. pnpm's own docs show this exact field living at
+the project root in `pnpm-workspace.yaml` instead. Confirmed live (pnpm
+12.8.1): `overrides: { is-number: 'npm:totally-hallucinated-pnpm-ws-
+override-alias-xyz-321@1.0.0' }` — with `is-number` a real transitive
+dependency of `is-odd`, named in no `package.json` at all — made `pnpm
+install` genuinely issue `GET https://registry.npmjs.org/totally-
+hallucinated-pnpm-ws-override-alias-xyz-321` and fail with a real 404;
+`is-number` itself was never fetched under its own name once
+overridden. An override key using pnpm's own `"parent@version>
+dependency"` scoping syntax is resolved to the real dependency name
+(the segment after the last `>`), and a literal `"-"` value (pnpm's
+documented "remove this dependency" syntax) is correctly skipped —
+real pnpm never fetches a removed dependency. Before this fix,
+`pnpm-workspace.yaml`'s entire body was discarded unconditionally (the
+file was only recognized for its `packages:` workspace-membership
+role), so a hallucinated name routed through its `overrides` field was
+invisible no matter what.
 
 A conda `environment.yml`/`environment.yaml` is now recognized as a
 manifest too (fixed in v0.1.66 — earlier versions had no filename entry
