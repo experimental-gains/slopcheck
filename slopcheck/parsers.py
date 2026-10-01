@@ -2042,16 +2042,108 @@ def environment_yml_files_touched(path: Path) -> set[Path]:
     return touched
 
 
-def _parse_pnpm_workspace_yaml(path: Path) -> list[Dependency]:
-    """`pnpm-workspace.yaml` declares no dependencies of its own -- it's a
-    workspace-membership file, not a manifest (see `pnpm_workspace_member_names`)
-    -- but it still needs a `PARSERS` entry so `find_manifests`/`parse_manifest`
-    recognize and return it (as an ordinary, zero-dependency scan target)
-    rather than raising "don't know how to parse this file" the moment a
-    caller passes it directly, the same way an empty-but-recognized
-    manifest of any other format is handled.
+_PNPM_WORKSPACE_OVERRIDE_ENTRY_RE = re.compile(r"^([^:\s][^:]*):\s*(.*)$")
+
+
+def _pnpm_workspace_overrides(text: str) -> dict[str, str]:
+    """Extract pnpm-workspace.yaml's own top-level `overrides:` mapping (key -> raw value string).
+
+    pnpm's `overrides` field (https://pnpm.io/settings/dependency-resolution#overrides)
+    can be set at the root of the project either in `package.json`'s `pnpm.overrides`
+    (already read by `_npm_overrides_deps`/`parse_package_json`) or, as of a real,
+    current pnpm feature, directly in `pnpm-workspace.yaml` instead -- pnpm's own docs
+    show the identical field under a `pnpm-workspace.yaml:` heading. Not a general YAML
+    parser, the same "hand-parse the subset of syntax that matters" approach already
+    used for this same file's own `packages:` list (`_pnpm_workspace_patterns`): a real
+    `overrides:` block is always a flat mapping of quoted-or-bare string keys to
+    quoted-or-bare string values, one level of indentation deep, confirmed against
+    pnpm's own docs examples and real `pnpm-workspace.yaml` files it generates.
     """
-    return []
+    overrides: dict[str, str] = {}
+    in_overrides = False
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent == 0:
+            top_match = _PNPM_WORKSPACE_TOP_KEY_RE.match(stripped)
+            in_overrides = bool(top_match) and top_match.group(1) == "overrides" and not top_match.group(2)
+            continue
+        if not in_overrides:
+            continue
+        entry_match = _PNPM_WORKSPACE_OVERRIDE_ENTRY_RE.match(stripped)
+        if entry_match:
+            key = entry_match.group(1).strip().strip("\"'")
+            value = entry_match.group(2).strip().strip("\"'")
+            if key:
+                overrides[key] = value
+    return overrides
+
+
+def _pnpm_workspace_override_names(overrides: dict[str, str]) -> list[str]:
+    """Resolve a pnpm-workspace.yaml `overrides` mapping into the npm package names it actually fetches.
+
+    Confirmed live (pnpm 12.8.1): an override key is a package selector, optionally
+    scoped to a specific parent with pnpm's own `"parent@version>dependency"` syntax
+    (https://pnpm.io/settings/dependency-resolution#overrides) -- only the segment
+    *after* the last `>` is the real dependency name being overridden, the same way
+    `>`-free keys (`"foo"`, `"bar@^2.1.0"`) already need their own trailing `@version`
+    pin stripped. A plain version-string value (including a `catalog:`/`catalog:<name>`
+    reference, which only redirects to a centrally-managed version and names no new
+    package) doesn't change which name pnpm resolves -- the key's own (derived) name is
+    what gets checked, exactly as `_npm_overrides_deps` already does for package.json's
+    sibling `overrides`/`pnpm.overrides` fields. An `npm:`-prefixed value substitutes a
+    *different* real package for the key's name instead (same aliasing rule
+    `_npm_overrides_deps` already handles) -- confirmed live: `overrides: {is-number:
+    'npm:totally-hallucinated-pnpm-ws-override-alias-xyz-321@1.0.0'}` (with `is-number`
+    a real, already-resolved transitive dependency, named nowhere in any package.json)
+    made `pnpm install` genuinely issue `GET https://registry.npmjs.org/
+    totally-hallucinated-pnpm-ws-override-alias-xyz-321` and fail with a real 404 --
+    `is-number` itself was never fetched under its own name at all once overridden. A
+    literal `"-"` value (pnpm's own documented syntax for removing a dependency
+    entirely rather than overriding its version) is skipped outright: real pnpm never
+    fetches a removed dependency, so checking the key's name here would be checking
+    something pnpm has deliberately made irrelevant to this install, not a hallucination
+    risk.
+
+    Before this fix, `_parse_pnpm_workspace_yaml` discarded a `pnpm-workspace.yaml`'s
+    entire body unconditionally -- it existed only so `find_manifests`/`parse_manifest`
+    would recognize the filename as an ordinary, zero-dependency scan target, correct
+    for the file's *workspace-membership* role (`packages:`, read separately by
+    `pnpm_workspace_member_names`) but silently wrong for this entirely different
+    field living in the same file: a real, install-breaking hallucinated override
+    target was invisible to slopcheck no matter what, since neither this function nor
+    any package.json reader ever looked at it.
+    """
+    names = []
+    for key, value in overrides.items():
+        if value == "-":
+            continue
+        if value.startswith(_NPM_ALIAS_PREFIX):
+            names.append(_npm_alias_target(value))
+        else:
+            names.append(_strip_version_suffix(key.rsplit(">", 1)[-1]))
+    return names
+
+
+def _parse_pnpm_workspace_yaml(path: Path) -> list[Dependency]:
+    """`pnpm-workspace.yaml` is primarily a workspace-membership file (see
+    `pnpm_workspace_member_names`), not an ordinary dependency manifest, but it also
+    carries pnpm's own `overrides:` field -- see `_pnpm_workspace_override_names` for
+    the real, live-verified gap this closes. Still needs a `PARSERS` entry so
+    `find_manifests`/`parse_manifest` recognize and return it (as an ordinary scan
+    target, zero dependencies when it carries no `overrides:` of its own) rather than
+    raising "don't know how to parse this file" the moment a caller passes it
+    directly, the same way any other recognized-but-otherwise-empty manifest is
+    handled.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        raise ManifestParseError(f"{path}: couldn't read ({e})") from e
+    overrides = _pnpm_workspace_overrides(text)
+    return [Dependency(name, "npm", str(path)) for name in _pnpm_workspace_override_names(overrides)]
 
 
 # pip-tools' own convention (https://pip-tools.readthedocs.io/en/stable/#requirementsin-vs-requirementstxt):

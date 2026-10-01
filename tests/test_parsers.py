@@ -244,6 +244,53 @@ def test_pnpm_workspace_member_names_ignores_missing_or_empty_packages_key(tmp_p
     assert pnpm_workspace_member_names([no_packages]) == []
 
 
+def test_parse_manifest_reads_pnpm_workspace_yaml_overrides(tmp_path: Path):
+    # Regression test for a real-world find: pnpm's own `overrides` field
+    # (https://pnpm.io/settings/dependency-resolution#overrides) can live
+    # directly in `pnpm-workspace.yaml` -- a real, current, documented
+    # location for it, distinct from package.json's `pnpm.overrides`
+    # (already read by `parse_package_json`). Confirmed live (pnpm 12.8.1):
+    # `overrides: {is-number: 'npm:totally-hallucinated-pnpm-ws-override-
+    # alias-xyz-321@1.0.0'}`, with `is-number` a real transitive dependency
+    # of `is-odd` named in no package.json at all, made `pnpm install`
+    # genuinely issue `GET https://registry.npmjs.org/totally-hallucinated-
+    # pnpm-ws-override-alias-xyz-321` and fail with a real 404 -- `is-number`
+    # itself was never fetched under its own name once overridden. Before
+    # this fix, `_parse_pnpm_workspace_yaml` discarded the file's entire
+    # body unconditionally (it only existed so `parse_manifest` recognized
+    # the filename at all), so this real, install-breaking hallucinated
+    # override target was invisible to slopcheck no matter what.
+    #
+    # Also covers pnpm's own `"parent@version>dependency"` override-key
+    # scoping syntax (only the segment after the last `>` is the real
+    # dependency being overridden, confirmed against pnpm's own docs) and
+    # the literal `"-"` value (pnpm's documented "remove this dependency"
+    # syntax -- never fetched by real pnpm, so not a checkable name).
+    path = tmp_path / "pnpm-workspace.yaml"
+    path.write_text(
+        "packages:\n"
+        "  - 'packages/*'\n"
+        "overrides:\n"
+        "  is-number: 'npm:totally-hallucinated-pnpm-ws-override-alias-xyz-321@1.0.0'\n"
+        "  \"qar@1>zoo\": '2'\n"
+        "  lodash: '-'\n"
+        "  foo: '^1.0.0'\n"
+    )
+
+    names = {dep.name for dep in parse_manifest(path)}
+
+    assert names == {"totally-hallucinated-pnpm-ws-override-alias-xyz-321", "zoo", "foo"}
+    assert "is-number" not in names
+    assert "lodash" not in names
+
+
+def test_parse_manifest_pnpm_workspace_yaml_with_no_overrides_key_is_empty(tmp_path: Path):
+    path = tmp_path / "pnpm-workspace.yaml"
+    path.write_text("packages:\n  - 'packages/*'\n")
+
+    assert parse_manifest(path) == []
+
+
 def test_pdm_workspace_member_names_from_tool_pdm_workspace(tmp_path: Path):
     # Regression test for a real-world find: PDM's own workspace feature
     # (https://pdm-project.org/latest/usage/workspace/, added 2.28.0) is a
