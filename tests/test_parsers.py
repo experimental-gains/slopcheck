@@ -1224,6 +1224,35 @@ def test_parse_pyproject_setuptools_dynamic_ignored_when_not_declared_dynamic(tm
     assert names == {"requests"}
 
 
+def test_parse_pyproject_setuptools_dynamic_does_not_follow_pip_directives(tmp_path: Path):
+    # Same underlying bug as
+    # test_parse_setup_cfg_file_directive_does_not_follow_pip_directives,
+    # found in the sibling PEP 621 `[tool.setuptools.dynamic]` code path --
+    # confirmed (reading pyprojecttoml.py's `_expand_directive`) to bottom
+    # out in the identical `expand.read_files` + flat-split logic as
+    # setup.cfg's own `file:` directive, and confirmed live that a real `pip
+    # install .` against this exact shape Fatals with the same
+    # `InvalidRequirement` error before resolving anything. Before this fix,
+    # `_setuptools_dynamic_deps` read the referenced file with
+    # `parse_requirements_txt`, which genuinely follows the "-r" line.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dynamic = ["dependencies"]
+
+        [tool.setuptools.dynamic]
+        dependencies = { file = "base-reqs.txt" }
+        """
+    )
+    (tmp_path / "base-reqs.txt").write_text("-r inner-reqs.txt\nflask\n")
+    (tmp_path / "inner-reqs.txt").write_text("totally-hallucinated-dynamicdep-xyz-888\n")
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"flask"}
+    assert "totally-hallucinated-dynamicdep-xyz-888" not in names
+
+
 def test_find_manifests_recurses_into_workspace_packages(tmp_path: Path):
     # Regression test for a real coverage gap found via real-world testing
     # against vitejs/vite's actual repo layout: the root `package.json` of a
@@ -1886,6 +1915,40 @@ def test_parse_setup_cfg_install_requires_file_directive(tmp_path: Path):
     assert sources["requests"] == str(tmp_path / "requirements.txt")
     assert sources["pytest"] == str(tmp_path / "requirements-dev.txt")
     assert sources["another-hallucinated-pkg-xyz654"] == str(tmp_path / "extra-dev.txt")
+
+
+def test_parse_setup_cfg_file_directive_does_not_follow_pip_directives(tmp_path: Path):
+    # Real-world find: setuptools' own `file:` directive (`_parse_file` +
+    # `_parse_requirements_list` in setupcfg.py, confirmed live against
+    # setuptools 84.0.0) is NOT a real pip requirements-file reader. It reads
+    # the referenced file's raw text and splits it on newline/";" exactly
+    # like a plain (non-`file:`) setup.cfg list value -- there's no `-r`
+    # recursion step, and a `-i`/`-e`/`-c` line isn't skipped as a directive,
+    # it's kept as a literal string and handed to
+    # `packaging.requirements.Requirement()` at build time. Live-verified: a
+    # real `pip install .`/`python -m build` against a setup.cfg whose
+    # `file:`-referenced requirements file contains "-r other.txt" Fatals
+    # immediately with `InvalidRequirement: Expected package name at the
+    # start of dependency specifier`, before any dependency -- including an
+    # innocent sibling requirement on the next line, or anything in the
+    # referenced "-r" target -- is ever resolved.
+    #
+    # Before this fix, `_setup_cfg_requirements_value` read the `file:`
+    # target with `parse_requirements_txt` (the real pip requirements-file
+    # parser), which genuinely follows a "-r other.txt" line into the
+    # referenced file and reports whatever's in there as an ordinary
+    # dependency of the project -- actively misleading, since the real tool
+    # never gets far enough to resolve (or even attempt to resolve) that name
+    # at all; the real, actionable problem (the malformed "-r" line itself,
+    # which breaks the build outright) was never surfaced.
+    (tmp_path / "base-reqs.txt").write_text("-r inner-reqs.txt\nflask\n")
+    (tmp_path / "inner-reqs.txt").write_text("totally-hallucinated-filedirective-xyz-999\n")
+    cfg = tmp_path / "setup.cfg"
+    cfg.write_text("[options]\ninstall_requires = file:base-reqs.txt\n")
+    deps = parse_setup_cfg(cfg)
+    names = {dep.name for dep in deps}
+    assert names == {"flask"}
+    assert "totally-hallucinated-filedirective-xyz-999" not in names
 
 
 def test_parse_setup_cfg_skips_self_referential_extras(tmp_path: Path):

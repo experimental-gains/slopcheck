@@ -523,8 +523,13 @@ def _setuptools_dynamic_deps(data: dict, base_dir: Path) -> list[Dependency]:
     runtime deps (jsonschema, networkx, numpy, scipy, watchdog) and 11 dev deps in
     requirements.txt/requirements-dev.txt, none of them ever checked. File paths are
     resolved relative to the directory containing pyproject.toml (setuptools' own
-    documented behavior); each referenced file is read the same way as a standalone
-    requirements.txt, since that's the format setuptools itself expects here.
+    documented behavior); each referenced file is read through `_file_directive_deps`,
+    NOT as a standalone requirements.txt (`parse_requirements_txt`, the real pip
+    requirements-file parser, used to be called here directly) — see
+    `_file_directive_deps`'s own docstring for why that's the wrong reference
+    implementation for a `file:`-style directive: setuptools' own file-reading
+    code never gives `-r`/`-i`/`-e`/`-c` any special meaning, and a `-r` line in
+    particular makes a real build Fatal immediately instead of being followed.
     """
     dynamic_fields = set(data.get("project", {}).get("dynamic", []))
     setuptools_dynamic = data.get("tool", {}).get("setuptools", {}).get("dynamic", {})
@@ -532,12 +537,12 @@ def _setuptools_dynamic_deps(data: dict, base_dir: Path) -> list[Dependency]:
 
     if "dependencies" in dynamic_fields:
         for filename in _setuptools_dynamic_files(setuptools_dynamic.get("dependencies")):
-            deps.extend(parse_requirements_txt(base_dir / filename))
+            deps.extend(_file_directive_deps(base_dir / filename))
 
     if "optional-dependencies" in dynamic_fields:
         for group_spec in setuptools_dynamic.get("optional-dependencies", {}).values():
             for filename in _setuptools_dynamic_files(group_spec):
-                deps.extend(parse_requirements_txt(base_dir / filename))
+                deps.extend(_file_directive_deps(base_dir / filename))
 
     return deps
 
@@ -750,6 +755,67 @@ def _setup_cfg_list_deps(value: str, path: Path) -> list[Dependency]:
     return deps
 
 
+def _file_directive_deps(file_path: Path) -> list[Dependency]:
+    """Read a setuptools `file:`-referenced file the way setuptools itself does:
+    as a flat, non-recursive, pip-directive-blind text blob — NOT a real pip
+    requirements file.
+
+    Both `_setup_cfg_requirements_value` (setup.cfg's `install_requires`/
+    `[options.extras_require]`) and `_setuptools_dynamic_deps` (PEP 621's
+    `[tool.setuptools.dynamic]` equivalent) used to read a `file:`-referenced
+    file with `parse_requirements_txt` — the real pip requirements-file
+    parser, which recognizes and follows `-r`/`-c`, and silently skips `-e`/
+    URL lines as directives rather than names. That's the wrong reference
+    implementation for this call site: setuptools' own file-reading code
+    (confirmed reading setuptools 84.0.0's `setupcfg.py` `_parse_file`/
+    `_parse_requirements_list` and `pyprojecttoml.py` `_expand_directive`,
+    both of which bottom out in the identical `expand.read_files` + a plain
+    `_parse_list_semicolon` split) never gives any of pip's own command-line
+    directives special meaning at all — every non-blank, non-`#`-comment
+    line becomes a literal candidate requirement string, full stop. There is
+    no `-r`-recursion step, and a `-i`/`-e`/`-c` line isn't skipped, it's kept
+    verbatim and handed straight to `packaging.requirements.Requirement()`
+    during the real build.
+
+    Live-verified against real setuptools 84.0.0 (this project's own pinned
+    minimum) and real pip: a `file:`-target containing
+    `-r requirements-common.txt` (a real, easy-to-write pattern when the same
+    physical `requirements.txt` also gets used directly via `pip install -r`,
+    where `-r` genuinely is followed) makes `read_configuration`'s resolved
+    `install_requires` literally include the string
+    `'-r requirements-common.txt'` — and a real `pip install .`/
+    `python -m build` against that setup.cfg Fatals immediately with
+    `packaging.requirements.InvalidRequirement: Expected package name at the
+    start of dependency specifier`, before a single dependency (including an
+    innocent sibling requirement on the next line) is ever resolved. The
+    identical crash reproduces for a PEP 621 `[tool.setuptools.dynamic]
+    dependencies = {file = [...]}` pointing at the same kind of file — both
+    code paths bottom out in the same `Distribution._normalize_requires`
+    call. Before this fix, `parse_requirements_txt`'s own `-r`-following
+    behavior made slopcheck recurse into `requirements-common.txt` and report
+    whatever hallucinated name sat there as a plain `not_found` dependency of
+    the project — actively misleading, since the real tool never gets far
+    enough to resolve (or even attempt to resolve) that name at all; the real,
+    actionable problem (the malformed `-r` line itself, which breaks the
+    build outright) was never mentioned.
+
+    Uses `_setup_cfg_list_deps` (the same splitter already used for a plain,
+    non-`file:` setup.cfg list value, which matches real setuptools'
+    `_parse_list_semicolon` exactly: split on newline if present, else `;`,
+    drop blank lines, regex-match each remaining chunk as a name) rather than
+    `parse_requirements_txt`, so a `-r`/`-i`/`-e`/url line is treated exactly
+    like real setuptools treats it: not specially recognized, and — since it
+    doesn't match a plain package name — simply never extracted as a
+    dependency, the same as any other line this simple parser can't make
+    sense of.
+    """
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return _setup_cfg_list_deps(text, file_path)
+
+
 def _setup_cfg_requirements_value(value: str, path: Path) -> list[Dependency]:
     """Resolve an `install_requires`/`[options.extras_require]` value, following
     setuptools' own `file:` directive when present.
@@ -783,11 +849,11 @@ def _setup_cfg_requirements_value(value: str, path: Path) -> list[Dependency]:
     silently dropped and the entire referenced file's dependencies were never
     checked: the same silent "0 dependencies checked, all clean"
     false-all-clear shape as the Pipfile/`[build-system] requires`/PEP 621
-    `dynamic` gaps already fixed here. Reuses `parse_requirements_txt` (not
-    the simpler `_setup_cfg_list_deps`) for the referenced file the same way
-    `_setuptools_dynamic_deps` already does for pyproject.toml's own
-    `file`-sourced dynamic dependencies, so `Dependency.source` correctly
-    points at the file the name was actually found in.
+    `dynamic` gaps already fixed here. Reads the referenced file through
+    `_file_directive_deps` (NOT `parse_requirements_txt` — see that
+    function's own docstring for why the real pip requirements-file parser
+    is the wrong reference implementation here), so `Dependency.source`
+    correctly points at the file the name was actually found in.
 
     `[options] setup_requires` deliberately does NOT get this treatment: its
     parser entry is the plain `self._parse_list_semicolon`, not
@@ -803,7 +869,7 @@ def _setup_cfg_requirements_value(value: str, path: Path) -> list[Dependency]:
     for raw_filename in stripped[len("file:") :].split(","):
         filename = raw_filename.strip()
         if filename:
-            deps.extend(parse_requirements_txt(base_dir / filename))
+            deps.extend(_file_directive_deps(base_dir / filename))
     return deps
 
 
