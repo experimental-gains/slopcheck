@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.75
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.76
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.75
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.76
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.75
+    rev: v0.1.76
     hooks:
       - id: slopcheck
 ```
@@ -1351,6 +1351,20 @@ reported as an ordinary, clean dependency, even though a real
 `pip install .`/`python -m build` genuinely Fatals with
 `InvalidRequirement` on that exact line before resolving any dependency at
 all, hallucinated or not).
+
+A `pylock.toml` `[[packages]]` entry whose `archive`/`sdist`/
+`[[packages.wheels]]` table names its file with a `path` key instead of a
+`url` key (PEP 751 supports either) is no longer checked against PyPI
+(fixed in v0.1.76 — earlier versions only excluded `vcs`/`directory`
+sources, so this shape slipped through to the ordinary registry check).
+Confirmed live with uv 0.12.19: pinning a dependency via
+`[tool.uv.sources]`'s file-path form (one exact local wheel, not a source
+directory) and running `uv export --format pylock.toml` produced an
+`archive = { path = "...", hashes = {...} }` table with no `url` anywhere
+in the entry — uv never queried PyPI for that name — while the pre-fix
+parser still sent it to the registry check and reported it `not_found`, a
+false "hallucinated" positive on a package no real locker tool ever
+resolved from the index.
 
 ## Development
 
