@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.84
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.85
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.84
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.85
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.84
+    rev: v0.1.85
     hooks:
       - id: slopcheck
 ```
@@ -1528,6 +1528,29 @@ dotfiles-managed machine baking in a company mirror once instead of
 repeating it per project) had every genuinely-resolvable private-only
 dependency reported as a plain `not_found` hallucination instead of
 downgraded to `private`.
+
+A uv workspace member scanned on its own now inherits its workspace
+root's private-index config too (fixed in v0.1.85). uv workspaces
+(https://docs.astral.sh/uv/concepts/projects/workspaces/) resolve as one
+shared unit: confirmed live (uv 0.12.19), a two-level layout
+(`root/pyproject.toml` with `[tool.uv.workspace] members = ["pkgs/*"]`
+plus a `[[tool.uv.index]]` entry pointing at an unreachable
+`127.0.0.1:9`, and `root/pkgs/foo/pyproject.toml` with no uv config of
+its own, naming a fake dependency) made `uv lock` run from *inside*
+`pkgs/foo` genuinely discover the workspace root and attempt to resolve
+the fake dependency against that root-configured index, never
+contacting PyPI — the same thing an explicit index declared only in the
+root and referenced via a member's own `[tool.uv.sources]` does too.
+Before this fix, `uv_private_registry_context` only ever looked at
+`uv.toml`/`[tool.uv]` in the directory holding each *scanned*
+pyproject.toml, so scanning just a workspace member directory — a
+realistic shape, e.g. a monorepo CI job scoped to one changed package,
+the same pattern already fixed for npm/Yarn workspaces — never saw the
+workspace root's index config at all (it isn't even among the scanned
+manifests), misreporting a genuinely-resolvable dependency as a plain
+`not_found` hallucination instead of downgraded to `private`. A
+directory excluded from the workspace via `[tool.uv.workspace].exclude`
+correctly does *not* get this treatment, confirmed live the same way.
 
 ## Development
 
