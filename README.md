@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.83
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.84
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.83
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.84
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.83
+    rev: v0.1.84
     hooks:
       - id: slopcheck
 ```
@@ -1506,6 +1506,28 @@ source/condition is checked unconditionally. Before this fix,
 planted there — invisible in the environment's own plain `dependencies`
 list — sailed through unchecked even though a real `hatch env create`
 genuinely tries to install it.
+
+PDM's own config files/env var for its default PyPI index are now read
+too (fixed in v0.1.84) — a seventh private-registry mechanism, entirely
+separate from the `[[tool.pdm.source]]` array in pyproject.toml this
+tool already handled: `pdm config pypi.url <url>` (or `pdm config
+pypi.<name>.url <url>` for an additional named source) writes to a
+project-local `pdm.toml`/legacy `.pdm.toml`, a per-user global
+`config.toml`, or a site-wide one — none of which is pyproject.toml —
+and `PDM_PYPI_URL` is `pypi.url`'s own documented env var equivalent.
+Confirmed live (PDM 2.29.2), with zero `[[tool.pdm.source]]` entries
+anywhere: a committed `pdm.toml` with `[pypi] url =
+"http://127.0.0.1:9/simple"` made `pdm lock` genuinely attempt that
+address instead of pypi.org (`ConnectError: Connection refused`), and
+the identical setting written only to `~/.config/pdm/config.toml` via
+`pdm config -g pypi.url ...`, or set only via `PDM_PYPI_URL`, was each
+honored the same way with no project-level config at all. Before this
+fix, a PDM project routing its default index through any of these (a
+real, `pdm config`-documented pattern — e.g. a CI image or
+dotfiles-managed machine baking in a company mirror once instead of
+repeating it per project) had every genuinely-resolvable private-only
+dependency reported as a plain `not_found` hallucination instead of
+downgraded to `private`.
 
 ## Development
 
