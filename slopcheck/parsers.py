@@ -1832,6 +1832,73 @@ def npm_workspace_root(start: Path) -> Path | None:
     return None
 
 
+def _uv_workspace_patterns(data: dict) -> tuple[list[str], list[str]]:
+    """Extract (members, exclude) glob patterns from a pyproject.toml's `[tool.uv.workspace]`."""
+    workspace = data.get("tool", {}).get("uv", {}).get("workspace", {})
+    if not isinstance(workspace, dict):
+        return [], []
+    members = [m for m in workspace.get("members", []) if isinstance(m, str)]
+    exclude = [m for m in workspace.get("exclude", []) if isinstance(m, str)]
+    return members, exclude
+
+
+def uv_workspace_root(start: Path) -> Path | None:
+    """Find the nearest ancestor pyproject.toml whose `[tool.uv.workspace]` claims `start` as a member.
+
+    uv (https://docs.astral.sh/uv/concepts/projects/workspaces/) resolves a
+    workspace member's package index config from the *workspace root*'s
+    `pyproject.toml`/`uv.toml`, not necessarily the member's own directory —
+    confirmed live (uv 0.12.19): a two-level layout (`root/pyproject.toml`
+    with `[tool.uv.workspace] members = ["pkgs/*"]` plus a `[[tool.uv.index]]`
+    entry pointing at an unreachable `http://127.0.0.1:9/simple`, and
+    `root/pkgs/foo/pyproject.toml` with *no* uv config of its own, naming a
+    fake dependency) made `uv lock` run from *inside* `pkgs/foo` genuinely
+    discover the workspace root ("Found static `pyproject.toml` for: ws-root
+    @ file:///.../root") and attempt to resolve the fake dependency against
+    that root-configured private index (`Connection refused` to
+    `127.0.0.1:9`, never contacted PyPI) — the same single-shared-lockfile
+    behavior as a `uv lock`/`uv sync` run from the root itself.
+
+    Before this fix, slopcheck's uv private-registry detection
+    (`uv_private_registry_context`) only ever looked at `uv.toml`/
+    `[tool.uv]` in the directory holding each *scanned* pyproject.toml.
+    Scanning a workspace member directory on its own — a realistic shape,
+    e.g. a monorepo CI job or pre-commit hook scoped to one changed package,
+    the exact same pattern already fixed for npm/Yarn workspaces via
+    `npm_workspace_root` — never saw the workspace root's index config at
+    all (it isn't even among the scanned manifests), so a dependency a real
+    `uv lock`/`uv sync` would resolve against the configured private index
+    was misreported as a plain `not_found` hallucination instead of
+    downgraded to `private`.
+
+    A plain nested pyproject.toml with no enclosing `[tool.uv.workspace]`
+    does *not* get this treatment: this only returns an ancestor whose
+    `members` patterns actually resolve to `start`, mirroring
+    `npm_workspace_root`'s exact-member-match rule rather than just the
+    nearest ancestor containing a pyproject.toml. An `exclude` pattern
+    matching `start` (uv's own documented way to carve a directory back out
+    of an otherwise-matching `members` glob) takes precedence, the same way
+    real uv's own workspace discovery treats it.
+    """
+    start_resolved = start.resolve()
+    for ancestor in start_resolved.parents:
+        pyproject = ancestor / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        members, exclude = _uv_workspace_patterns(data)
+        if not members:
+            continue
+        if exclude and _workspace_patterns_include_dir(ancestor, exclude, start_resolved):
+            continue
+        if _workspace_patterns_include_dir(ancestor, members, start_resolved):
+            return ancestor
+    return None
+
+
 _PNPM_WORKSPACE_TOP_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+):\s*(.*)$")
 _PNPM_WORKSPACE_LIST_ITEM_RE = re.compile(r"^-\s*(.*)$")
 

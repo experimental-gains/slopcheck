@@ -17,6 +17,7 @@ from slopcheck.parsers import (
     pdm_workspace_member_names,
     pnpm_workspace_member_names,
     requirements_txt_files_touched,
+    uv_workspace_root,
 )
 
 
@@ -247,6 +248,71 @@ def test_npm_workspace_root_none_with_no_ancestor_package_json(tmp_path: Path):
     nested.mkdir(parents=True)
 
     assert npm_workspace_root(nested) is None
+
+
+def test_uv_workspace_root_finds_ancestor_with_matching_members_pattern(tmp_path: Path):
+    # Regression test for a real-world find: confirmed live (uv 0.12.19)
+    # that `uv lock` run from inside a workspace *member* directory walks up
+    # and discovers the enclosing workspace root pyproject.toml (debug log:
+    # "Found static `pyproject.toml` for: ws-root @ ...") and consults that
+    # root's own private-index config for the member's dependency -- see
+    # `uv_workspace_root`'s docstring for the full live repro. This matters
+    # for slopcheck because a real scan is sometimes rooted at just the
+    # member directory (a monorepo CI job scoped to one changed package),
+    # and the workspace root's pyproject.toml never shows up among the
+    # scanned manifests at all in that case.
+    root = tmp_path / "root"
+    member = root / "pkgs" / "foo"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\n\n[tool.uv.workspace]\nmembers = ["pkgs/*"]\n'
+    )
+    (member / "pyproject.toml").write_text('[project]\nname = "foo"\n')
+
+    assert uv_workspace_root(member) == root
+
+
+def test_uv_workspace_root_respects_exclude(tmp_path: Path):
+    # Confirmed live (uv 0.12.19): a directory matched by `members` but also
+    # matched by `exclude` is genuinely treated as *outside* the workspace
+    # -- its own `uv lock` only ever contacted public PyPI, never the
+    # workspace root's configured private index, even though its path
+    # matches the `members` glob too.
+    root = tmp_path / "root"
+    member = root / "pkgs" / "excluded"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\n\n'
+        "[tool.uv.workspace]\n"
+        'members = ["pkgs/*"]\n'
+        'exclude = ["pkgs/excluded"]\n'
+    )
+    (member / "pyproject.toml").write_text('[project]\nname = "excluded"\n')
+
+    assert uv_workspace_root(member) is None
+
+
+def test_uv_workspace_root_none_without_workspace_table(tmp_path: Path):
+    # The mirror image: a plain nested pyproject.toml with no enclosing
+    # `[tool.uv.workspace]` does not get this treatment -- real uv treats
+    # the nested pyproject.toml as its own standalone project. Matching on a
+    # mere ancestor pyproject.toml's presence, without checking its
+    # `members` patterns actually resolve to the start directory, would risk
+    # wrongly suppressing a genuine hallucination elsewhere.
+    root = tmp_path / "root"
+    member = root / "sub"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text('[project]\nname = "root"\n')
+    (member / "pyproject.toml").write_text('[project]\nname = "sub"\n')
+
+    assert uv_workspace_root(member) is None
+
+
+def test_uv_workspace_root_none_with_no_ancestor_pyproject(tmp_path: Path):
+    nested = tmp_path / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+
+    assert uv_workspace_root(nested) is None
 
 
 def test_pnpm_workspace_member_names_from_separate_yaml_file(tmp_path: Path):

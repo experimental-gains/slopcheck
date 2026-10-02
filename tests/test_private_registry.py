@@ -1975,6 +1975,149 @@ def test_uv_explicit_index_declared_only_in_uv_toml_still_scopes_pyproject_sourc
     assert uv_private_registry_context([pyproject]) == (False, {"totally-fake-pkg"})
 
 
+def test_uv_workspace_member_scanned_alone_sees_root_blanket_index(tmp_path: Path, monkeypatch):
+    """Regression test for a real-world find: confirmed live (uv 0.12.19) —
+    a workspace root pyproject.toml's non-explicit `[[tool.uv.index]]` is
+    genuinely consulted for a member's dependency even when `uv lock` is
+    run from *inside* the member directory alone (uv discovers the
+    workspace root automatically, the same single-shared-lockfile behavior
+    as running from the root itself). Before this fix, scanning only the
+    member's own pyproject.toml (a realistic shape: a monorepo CI job
+    scoped to one changed package) never saw the root's index config at
+    all, since the root pyproject.toml isn't even among the scanned paths.
+    """
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "root"
+    member = root / "pkgs" / "foo"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\ndependencies = []\n'
+        "\n[tool.uv.workspace]\n"
+        'members = ["pkgs/*"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+    member_pyproject = member / "pyproject.toml"
+    member_pyproject.write_text('[project]\nname = "foo"\ndependencies = ["totally-fake-pkg"]\n')
+
+    blanket, explicit_names = uv_private_registry_context([member_pyproject])
+
+    assert blanket is True
+    assert explicit_names == set()
+
+
+def test_uv_workspace_member_scanned_alone_sees_root_explicit_index_source(tmp_path: Path, monkeypatch):
+    """The cross-file counterpart of `test_uv_workspace_root_...`: an
+    `explicit = true` index declared only in the workspace root's
+    pyproject.toml, referenced by a member's own `[tool.uv.sources]` --
+    confirmed live (uv 0.12.19) that a real `uv lock` run from inside the
+    member alone genuinely resolves this, going straight to the configured
+    index for exactly that one dependency and nothing else."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "root"
+    member = root / "pkgs" / "baz"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\ndependencies = []\n'
+        "\n[tool.uv.workspace]\n"
+        'members = ["pkgs/*"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+        "explicit = true\n"
+    )
+    member_pyproject = member / "pyproject.toml"
+    member_pyproject.write_text(
+        '[project]\nname = "baz"\ndependencies = ["totally-fake-pkg", "requests"]\n'
+        "\n[tool.uv.sources]\n"
+        'totally-fake-pkg = { index = "internal" }\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([member_pyproject])
+
+    assert blanket is False
+    assert explicit_names == {"totally-fake-pkg"}
+
+
+def test_uv_workspace_excluded_member_scanned_alone_sees_no_root_config(tmp_path: Path, monkeypatch):
+    """The mirror image: confirmed live (uv 0.12.19) that a directory listed
+    in `exclude` is genuinely treated as outside the workspace -- its own
+    `uv lock` only ever contacts public PyPI, never the root's configured
+    private index. Matching this matters: wrongly inheriting the root's
+    config for an excluded directory would downgrade a real hallucination
+    there to `private` and silently swallow it."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "root"
+    member = root / "pkgs" / "excluded"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\ndependencies = []\n'
+        "\n[tool.uv.workspace]\n"
+        'members = ["pkgs/*"]\n'
+        'exclude = ["pkgs/excluded"]\n'
+        "\n[[tool.uv.index]]\n"
+        'name = "internal"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+    member_pyproject = member / "pyproject.toml"
+    member_pyproject.write_text('[project]\nname = "excluded"\ndependencies = ["totally-fake-pkg"]\n')
+
+    blanket, explicit_names = uv_private_registry_context([member_pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_uv_workspace_member_scanned_alone_sees_root_find_links(tmp_path: Path, monkeypatch):
+    """`find-links` folds into `blanket` the same way a non-explicit index
+    does, so the workspace-root inheritance fix needs to cover it too."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "root"
+    member = root / "pkgs" / "foo"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\ndependencies = []\n'
+        "\n[tool.uv.workspace]\n"
+        'members = ["pkgs/*"]\n'
+        "\n[tool.uv]\n"
+        'find-links = ["/path/to/local-wheels"]\n'
+    )
+    member_pyproject = member / "pyproject.toml"
+    member_pyproject.write_text('[project]\nname = "foo"\ndependencies = ["totally-fake-pkg"]\n')
+
+    blanket, _explicit_names = uv_private_registry_context([member_pyproject])
+
+    assert blanket is True
+
+
+def test_uv_workspace_member_scanned_alone_sees_root_standalone_uv_toml(tmp_path: Path, monkeypatch):
+    """The workspace-root inheritance also needs to reach a standalone
+    `uv.toml` sitting at the root, not just `[tool.uv]` in the root's
+    pyproject.toml."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "root"
+    member = root / "pkgs" / "foo"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\ndependencies = []\n\n[tool.uv.workspace]\nmembers = ["pkgs/*"]\n'
+    )
+    (root / "uv.toml").write_text(
+        '[[index]]\nname = "internal"\nurl = "https://pypi.internal.example/simple"\n'
+    )
+    member_pyproject = member / "pyproject.toml"
+    member_pyproject.write_text('[project]\nname = "foo"\ndependencies = ["totally-fake-pkg"]\n')
+
+    blanket, _explicit_names = uv_private_registry_context([member_pyproject])
+
+    assert blanket is True
+
+
 def test_uv_index_entries_ignores_non_list_value(tmp_path: Path, monkeypatch):
     """A malformed `index = "not-a-table-array"` (real uv itself hard-errors
     on this shape, "invalid type: string, expected a sequence", confirmed

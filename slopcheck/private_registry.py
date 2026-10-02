@@ -29,7 +29,7 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
-from .parsers import _normalize_name, npm_workspace_root
+from .parsers import _normalize_name, npm_workspace_root, uv_workspace_root
 
 # `-f`/`--find-links` (a flat file/HTML-page/local-directory source of
 # archives, searched *in addition to* the configured index rather than
@@ -970,6 +970,18 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
     `_uv_has_find_links`'s own comment for the live-verified gap this closes
     (uv's own analog of pip's `-f`/`--find-links`, previously unhandled here
     even though the equivalent pip directive was already fixed).
+
+    A scanned pyproject.toml that's actually a uv workspace *member* (not
+    the workspace root itself) also pulls in its enclosing workspace root's
+    `uv.toml`/`[tool.uv]` config — confirmed live, see `uv_workspace_root`'s
+    own docstring for the gap this closes (the uv analog of
+    `npm_workspace_root`'s identical fix for npm/Yarn). Every `pyproject.toml`
+    this function reads (a scanned path's own, plus any workspace root found
+    this way) is parsed once into `parsed_uv_tables` up front, so the later
+    per-dependency `[tool.uv.sources]` scoping pass always sees the complete
+    `explicit_index_names` set regardless of which file — root or member —
+    happened to declare the matching `[[tool.uv.index]]` entry, rather than
+    depending on `pyproject_paths`' own, otherwise-arbitrary iteration order.
     """
     blanket = any(os.environ.get(var) for var in _UV_ENV_BLANKET_VARS)
     explicit_index_names: set[str] = set()
@@ -986,7 +998,13 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
                 blanket = True
 
     project_roots = [p.parent for p in pyproject_paths]
-    for path in _uv_config_paths(project_roots):
+    workspace_roots = {root for root in (uv_workspace_root(r) for r in project_roots) if root is not None}
+    all_roots = list(dict.fromkeys([*project_roots, *workspace_roots]))
+    all_pyproject_paths = list(
+        dict.fromkeys([*pyproject_paths, *(root / "pyproject.toml" for root in workspace_roots)])
+    )
+
+    for path in _uv_config_paths(all_roots):
         if not path.is_file():
             continue
         try:
@@ -997,7 +1015,8 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
         if _uv_has_find_links(data):
             blanket = True
 
-    for path in pyproject_paths:
+    parsed_uv_tables: list[dict] = []
+    for path in all_pyproject_paths:
         if not path.is_file():
             continue
         try:
@@ -1007,19 +1026,20 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
         uv = data.get("tool", {}).get("uv", {})
         if not isinstance(uv, dict):
             continue
+        parsed_uv_tables.append(uv)
         _collect(_uv_index_entries(uv))
         if _uv_has_find_links(uv):
             blanket = True
 
-        if not explicit_index_names:
-            continue
-        sources = uv.get("sources", {})
-        if not isinstance(sources, dict):
-            continue
-        for dep_name, spec in sources.items():
-            specs = spec if isinstance(spec, list) else [spec]
-            if any(isinstance(s, dict) and s.get("index") in explicit_index_names for s in specs):
-                explicit_dep_names.add(_normalize_name(dep_name))
+    if explicit_index_names:
+        for uv in parsed_uv_tables:
+            sources = uv.get("sources", {})
+            if not isinstance(sources, dict):
+                continue
+            for dep_name, spec in sources.items():
+                specs = spec if isinstance(spec, list) else [spec]
+                if any(isinstance(s, dict) and s.get("index") in explicit_index_names for s in specs):
+                    explicit_dep_names.add(_normalize_name(dep_name))
 
     return blanket, explicit_dep_names
 
