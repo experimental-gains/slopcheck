@@ -1716,6 +1716,92 @@ def test_pipfile_missing_file_is_not_an_error(tmp_path: Path):
     assert explicit_names == set()
 
 
+def _clear_pipenv_env(monkeypatch) -> None:
+    monkeypatch.delenv("PIPENV_PYPI_MIRROR", raising=False)
+
+
+def test_pipfile_pypi_mirror_env_var_is_blanket(tmp_path: Path, monkeypatch):
+    """Confirmed live (`pipenv lock` under Pipenv 2026.8.0): with the
+    conventional `name = "pypi", url = "https://pypi.org/simple"` as the
+    Pipfile's only source, setting `PIPENV_PYPI_MIRROR` alone (no Pipfile
+    change at all) made a real `pipenv lock` genuinely attempt a connection
+    to the mirror's address for an undecorated dependency instead of
+    pypi.org."""
+    _clear_pipenv_env(monkeypatch)
+    monkeypatch.setenv("PIPENV_PYPI_MIRROR", "http://127.0.0.1:9/simple")
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "verify_ssl = true\n"
+        "\n"
+        "[packages]\n"
+        'internal-only-pkg = "*"\n'
+    )
+
+    blanket, _explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is True
+
+
+def test_pipfile_pypi_mirror_env_var_with_no_source_table_is_blanket(tmp_path: Path, monkeypatch):
+    """Confirmed live: Pipenv's own implicit default source (used when a
+    Pipfile has no `[[source]]` table at all) is public PyPI, and
+    `PIPENV_PYPI_MIRROR` replaces it the same way it replaces an explicit
+    `name = "pypi"` source -- a real `pipenv lock` genuinely attempted the
+    mirror's address with zero `[[source]]` anywhere in the Pipfile."""
+    _clear_pipenv_env(monkeypatch)
+    monkeypatch.setenv("PIPENV_PYPI_MIRROR", "http://127.0.0.1:9/simple")
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text('[packages]\ninternal-only-pkg = "*"\n')
+
+    blanket, _explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is True
+
+
+def test_pipfile_pypi_mirror_env_var_set_to_public_pypi_is_not_blanket(tmp_path: Path, monkeypatch):
+    _clear_pipenv_env(monkeypatch)
+    monkeypatch.setenv("PIPENV_PYPI_MIRROR", "https://pypi.org/simple")
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "\n"
+        "[packages]\n"
+        'requests = "*"\n'
+    )
+
+    blanket, explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
+def test_pipfile_pypi_mirror_env_var_does_not_affect_already_private_default(tmp_path: Path, monkeypatch):
+    """The mirror env var only overwrites a source whose *current* url is
+    public PyPI (`is_pypi_url`) -- a Pipfile whose first source is already a
+    private mirror is unaffected, and this function's existing
+    non-public-URL check already covers it regardless of the env var."""
+    _clear_pipenv_env(monkeypatch)
+    monkeypatch.setenv("PIPENV_PYPI_MIRROR", "http://127.0.0.1:9/simple")
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "internal"\n'
+        'url = "https://pkgs.internal.example/simple"\n'
+        "\n"
+        "[packages]\n"
+        'internal-only-pkg = "*"\n'
+    )
+
+    blanket, _explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert blanket is True
+
+
 def _clear_uv_env(monkeypatch) -> None:
     for var in (*private_registry._UV_ENV_BLANKET_VARS, "UV_CONFIG_FILE", "XDG_CONFIG_HOME"):
         monkeypatch.delenv(var, raising=False)

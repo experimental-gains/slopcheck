@@ -843,9 +843,35 @@ def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, s
     ordinary, pure-public-PyPI Pipfiles as blanket-private and silently
     swallow every real hallucination in them. The first source's `url` value
     itself is compared against the known public-PyPI URLs instead.
+
+    `PIPENV_PYPI_MIRROR` is a *fifth*, entirely separate mechanism, outside
+    the Pipfile itself: reading Pipenv's own source
+    (`pipenv/utils/sources.py`'s `pipfile_sources`), when this env var is
+    set it overwrites the `url` of every source — including the implicit
+    built-in default used when a Pipfile has no `[[source]]` table at all —
+    whose current `url` matches `is_pypi_url` (`^https?://pypi(\\.python)?
+    \\.org/simple/?$`, the same public-PyPI URL set `_is_public_pypi_url`
+    already recognizes). Confirmed live (real `pipenv lock` under Pipenv
+    2026.8.0, two arrangements, watching for the `127.0.0.1:9` connection
+    attempt): a Pipfile with the conventional `name = "pypi", url =
+    "https://pypi.org/simple"` as its only source, and a Pipfile with *no*
+    `[[source]]` table at all, both genuinely routed an undecorated
+    dependency's resolution to `PIPENV_PYPI_MIRROR`'s address instead of
+    pypi.org — the exact mirror/caching-proxy pattern pip's own
+    `PIP_INDEX_URL` and PDM's `PDM_PYPI_URL` already get folded into
+    `blanket` elsewhere in this file. Before this fix, neither case was
+    recognized at all, so a Pipenv project run with this env var set (a
+    real, documented pattern — an offline/airgapped CI image or a
+    company-wide caching mirror baked into the environment rather than
+    repeated per-project) had every genuinely-resolvable dependency
+    reported as a plain `not_found` hallucination instead of downgraded to
+    `private`.
     """
     blanket = False
     explicit_names: set[str] = set()
+
+    mirror = os.environ.get("PIPENV_PYPI_MIRROR")
+    mirror_replaces_public = bool(mirror) and not _is_public_pypi_url(mirror)
 
     for path in pipfile_paths:
         if not path.is_file():
@@ -857,6 +883,11 @@ def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, s
 
         sources = data.get("source", [])
         if not isinstance(sources, list) or not sources:
+            # No `[[source]]` table at all: Pipenv's own implicit default
+            # source is public PyPI, which PIPENV_PYPI_MIRROR replaces the
+            # same as an explicit one — see this function's own docstring.
+            if mirror_replaces_public:
+                blanket = True
             continue
 
         source_urls = {
@@ -867,6 +898,8 @@ def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, s
 
         default_url = sources[0].get("url", "") if isinstance(sources[0], dict) else ""
         if default_url and not _is_public_pypi_url(default_url):
+            blanket = True
+        elif mirror_replaces_public and _is_public_pypi_url(default_url):
             blanket = True
 
         for section in ("packages", "dev-packages"):
