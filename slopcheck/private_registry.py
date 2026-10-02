@@ -31,7 +31,29 @@ except ModuleNotFoundError:  # Python 3.10
 
 from .parsers import _normalize_name, npm_workspace_root
 
-_PIP_DIRECTIVE_RE = re.compile(r"^(?:-i|--(?:index-url|extra-index-url|pypi-url)\b)")
+# `-f`/`--find-links` (a flat file/HTML-page/local-directory source of
+# archives, searched *in addition to* the configured index rather than
+# instead of it) is a genuinely separate way for a real `pip install` to
+# resolve a name slopcheck can't see on public PyPI, not just a cosmetic
+# alternative spelling of `-i`/`--extra-index-url`. Confirmed live (pip
+# 25.1.1, a real wheel built for a never-published name and dropped in a
+# throwaway local directory): a requirements.txt with `-f
+# /path/to/local-wheels` as its first line and an unqualified
+# `totally-hallucinated-findlinks-xyz-123==1.0.0` on the next line made
+# `pip install --dry-run -r` genuinely find and "Would install" that exact
+# version from the local directory ("Looking in links: /path/to/local-wheels"),
+# with the public PyPI JSON API returning a plain 404 for the same name the
+# whole time -- both the spaced (`-f /path`) and pip's own documented
+# concatenated-short-option (`-f/path`) and `--find-links=/path` forms
+# resolved identically. A local/internal wheelhouse reachable only this way
+# (airgapped CI, a vendored-wheels directory committed alongside the project)
+# is a real, current pattern distinct from a PEP 503 package index -- before
+# this fix, slopcheck had no notion of it at all and reported a dependency
+# resolvable this way as a plain `not_found` hallucination, the same
+# misclassification already fixed here for `-i`/`--extra-index-url`, pip.conf,
+# and `PIP_EXTRA_INDEX_URL`/`PIP_INDEX_URL`, just for this one still-uncovered
+# real pip directive.
+_PIP_DIRECTIVE_RE = re.compile(r"^(?:-i|-f|--(?:index-url|extra-index-url|pypi-url|find-links)\b)")
 
 
 def _env_ci(name: str) -> str | None:
@@ -177,16 +199,16 @@ def _pip_config_paths() -> list[Path]:
     return paths
 
 
-_PIP_INDEX_OPTION_NAMES = {"extra-index-url", "index-url"}
+_PIP_INDEX_OPTION_NAMES = {"extra-index-url", "index-url", "find-links"}
 
 
 def _pip_config_has_extra_index() -> bool:
-    """Whether any of pip's config files sets an extra/alternate index.
+    """Whether any of pip's config files sets an extra/alternate index, or a find-links source.
 
     Checks each option name in both pip.conf's canonical dash spelling and
-    its underscore alias (`extra_index_url`/`index_url`) — confirmed live
-    (`PIP_CONFIG_FILE=... pip config -v list`) that real pip's own config
-    loader normalizes every key it reads with `name.lower().replace("_",
+    its underscore alias (`extra_index_url`/`index_url`/`find_links`) —
+    confirmed live (`PIP_CONFIG_FILE=... pip config -v list`) that real pip's
+    own config loader normalizes every key it reads with `name.lower().replace("_",
     "-")` (pip._internal.configuration._normalized_keys) before storing it,
     so `extra_index_url = ...` in pip.conf is exactly as effective as
     `extra-index-url = ...` — and confirmed further (`pip install --dry-run
@@ -199,6 +221,15 @@ def _pip_config_has_extra_index() -> bool:
     underscore spelling — a real, pip-documented-equivalent spelling, not an
     invalid one — misreporting a genuinely private-only dependency as a
     plain `not_found` hallucination instead of downgrading it to `private`.
+
+    `find-links` (`[global] find-links = ...`) is included alongside the two
+    index options for the same reason `_PIP_DIRECTIVE_RE` now matches `-f`/
+    `--find-links` on a requirements.txt line — see that regex's own comment
+    for the live-verified gap. Confirmed live the same way here too: a
+    `pip.conf` with only `[global] find-links = /path/to/local-wheels` (no
+    `index-url`/`extra-index-url` at all) made a real `pip install --dry-run
+    -r` genuinely resolve and "Would install" a name that 404s on the public
+    PyPI JSON API, straight from that local directory.
     """
     for path in _pip_config_paths():
         if not path.is_file():
@@ -252,8 +283,20 @@ def pip_private_index_configured(
     install -r` subprocess), but it lives inside a YAML file's body, not as
     its own `.txt`/`.in` path this function could just read directly the way
     it does for every other source here.
+
+    `PIP_FIND_LINKS` is pip's own env var equivalent of a requirements-file
+    `-f`/`--find-links` line (see `_PIP_DIRECTIVE_RE`'s own comment for the
+    live-verified gap this whole find-links handling closes) — confirmed
+    live the same way: with no `-f` anywhere in any scanned file, setting
+    only `PIP_FIND_LINKS=/path/to/local-wheels` in the environment still made
+    a real `pip install --dry-run -r` resolve a name that 404s on public
+    PyPI straight from that directory.
     """
-    if os.environ.get("PIP_EXTRA_INDEX_URL") or os.environ.get("PIP_INDEX_URL"):
+    if (
+        os.environ.get("PIP_EXTRA_INDEX_URL")
+        or os.environ.get("PIP_INDEX_URL")
+        or os.environ.get("PIP_FIND_LINKS")
+    ):
         return True
     if _pip_config_has_extra_index():
         return True

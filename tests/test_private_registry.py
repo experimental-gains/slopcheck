@@ -114,6 +114,110 @@ def test_pip_private_index_from_pip_conf(tmp_path: Path, monkeypatch):
     assert pip_private_index_configured([reqs]) is True
 
 
+def test_pip_private_index_from_requirements_txt_find_links(tmp_path: Path, monkeypatch):
+    """`-f`/`--find-links` points pip at a flat file/local-directory source of
+    archives, searched *in addition to* the configured index — a genuinely
+    separate mechanism from `-i`/`--extra-index-url`, not a cosmetic
+    alternative spelling of it. Confirmed live (pip 25.1.1): a real wheel
+    built for a never-published name and dropped in a throwaway local
+    directory, with a requirements.txt reading `-f /path/to/local-wheels`
+    then an unqualified `totally-hallucinated-findlinks-xyz-123==1.0.0`,
+    made `pip install --dry-run -r` genuinely find and "Would install" that
+    exact version from the local directory ("Looking in links:
+    /path/to/local-wheels"), while the public PyPI JSON API returned a plain
+    404 for the same name the whole time. Before this fix, `_PIP_DIRECTIVE_RE`
+    had no `-f`/`--find-links` branch at all, so slopcheck reported this
+    genuinely-installable dependency as a plain `not_found` hallucination."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_FIND_LINKS", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("-f /path/to/local-wheels\ntotally-hallucinated-findlinks-xyz-123==1.0.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
+def test_pip_private_index_from_requirements_txt_find_links_attached(tmp_path: Path, monkeypatch):
+    """Same optparse short-option attachment pip accepts for `-i` (confirmed
+    live, `-f/path/to/local-wheels` with no space resolved identically to the
+    spaced form against a real local wheel directory)."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_FIND_LINKS", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("-f/path/to/local-wheels\ntotally-hallucinated-findlinks-xyz-123==1.0.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
+def test_pip_private_index_from_requirements_txt_find_links_long_flag_equals(tmp_path: Path, monkeypatch):
+    """pip also accepts the long-flag `=`-joined form (confirmed live,
+    `--find-links=/path/to/local-wheels` resolved identically)."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_FIND_LINKS", raising=False)
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("--find-links=/path/to/local-wheels\ntotally-hallucinated-findlinks-xyz-123==1.0.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
+def test_pip_private_index_from_find_links_env_var(tmp_path: Path, monkeypatch):
+    """`PIP_FIND_LINKS` is pip's own env var equivalent of a requirements-file
+    `-f`/`--find-links` line — confirmed live: with no `-f` anywhere in any
+    scanned file, setting only `PIP_FIND_LINKS=/path/to/local-wheels` in the
+    environment still made a real `pip install --dry-run -r` resolve a name
+    that 404s on public PyPI straight from that directory."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.setenv("PIP_FIND_LINKS", "/path/to/local-wheels")
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("totally-hallucinated-findlinks-xyz-123==1.0.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
+def test_pip_private_index_from_pip_conf_find_links(tmp_path: Path, monkeypatch):
+    """`[global] find-links = ...` in pip.conf — confirmed live the same way
+    as the requirements.txt directive above: a pip.conf with only this one
+    setting (no `index-url`/`extra-index-url` at all) made a real
+    `pip install --dry-run -r` resolve a name that 404s on public PyPI
+    straight from the configured local directory."""
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_EXTRA_INDEX_URL", raising=False)
+    monkeypatch.delenv("PIP_FIND_LINKS", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    pip_conf = tmp_path / "pip.conf"
+    pip_conf.write_text("[global]\nfind-links = /path/to/local-wheels\n")
+    monkeypatch.setenv("PIP_CONFIG_FILE", str(pip_conf))
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("totally-hallucinated-findlinks-xyz-123==1.0.0\n")
+
+    assert pip_private_index_configured([reqs]) is True
+
+
+def test_pip_config_has_extra_index_checks_underscore_find_links(tmp_path: Path, monkeypatch):
+    """Same underscore-spelling normalization pip's own config loader applies
+    to every option it reads (confirmed live, see
+    test_pip_config_has_extra_index_checks_underscore_option_spelling above),
+    just for `find_links` instead of `extra_index_url`."""
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    conf = tmp_path / "pip.conf"
+    conf.write_text("[global]\nfind_links = /path/to/local-wheels\n")
+    monkeypatch.setenv("PIP_CONFIG_FILE", str(conf))
+
+    assert private_registry._pip_config_has_extra_index() is True
+
+
 def test_pip_private_index_from_virtualenv_pip_conf(tmp_path: Path, monkeypatch):
     # pip reads $VIRTUAL_ENV/pip.conf when running inside an active venv, in
     # addition to the user/system locations — verified live against pip's
