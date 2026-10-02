@@ -88,6 +88,30 @@ def test_check_pypi_all_yanked_but_recent_is_still_not_found():
     assert result.status == "not_found"
 
 
+def test_check_pypi_recent_release_after_old_yanked_release_is_flagged_recent():
+    # A project whose only old release was yanked and whose sole real,
+    # installable release is brand new: a real unqualified `pip install
+    # <name>` ignores the yanked file completely (PEP 592) and resolves
+    # straight to the fresh one -- confirmed live (pip 25.1.1, a from-scratch
+    # local index with testpkg-1.0.0 marked `data-yanked` and testpkg-1.0.1
+    # not): `pip install --dry-run -i <index> testpkg` downloads and would
+    # install only 1.0.1, never even considering 1.0.0. So the age that
+    # matters for the "recent" heuristic is the fresh, non-yanked release's
+    # age, not the long-dead yanked one's -- a hallucinated/reused project
+    # name whose only old release was yanked and which just got a brand new
+    # (possibly malicious) release should still be flagged "recent", the
+    # same as any other package published days ago.
+    data = {
+        "releases": {
+            "0.1.0": [{"upload_time_iso_8601": _iso(400), "yanked": True}],
+            "1.0.0": [{"upload_time_iso_8601": _iso(2), "yanked": False}],
+        }
+    }
+    with patch.object(registries, "_get_json", return_value=data):
+        result = registries.check_pypi("old-yanked-then-fresh-takeover")
+    assert result.status == "recent"
+
+
 def test_check_npm_not_found():
     with patch.object(registries, "_get_json", return_value=None):
         result = registries.check_npm("this-package-does-not-exist-xyz")

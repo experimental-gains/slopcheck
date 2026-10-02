@@ -116,7 +116,34 @@ def check_pypi(name: str) -> LookupResult:
     if all(file_info.get("yanked") for file_info in release_files):
         return LookupResult("not_found", "every release has been yanked on PyPI")
 
-    age_days = _days_since(min(upload_times))
+    # The age used for the "recent" heuristic has to reflect the oldest
+    # release a real unqualified `pip install <name>` can actually resolve
+    # to, not the oldest release ever uploaded. PEP 592 makes pip ignore
+    # every yanked file when there's no exact version pin (the case this
+    # tool always models -- see this function's own yanked-handling comment
+    # above), so a yanked file's upload date shouldn't count toward "how
+    # long has this been installable" any more than it counts toward
+    # whether the project is installable at all (the all-yanked check just
+    # above). Before this fix, `min(upload_times)` was computed across every
+    # release file regardless of yanked status, so a project whose only old
+    # release was yanked and whose sole real, installable release is brand
+    # new reported "ok" (the old, yanked file's date dominated the min) even
+    # though a real `pip install <name>` today resolves straight to the
+    # fresh release and only the fresh release -- confirmed live (pip
+    # 25.1.1, a from-scratch local index: `testpkg-1.0.0` marked
+    # `data-yanked`, `testpkg-1.0.1` not): `pip install --dry-run -i <index>
+    # testpkg` downloads and would install only 1.0.1, never considering
+    # 1.0.0 at all. That's exactly the shape a reused/taken-over PyPI
+    # project name can produce (old legitimate releases yanked, one new
+    # possibly-malicious release published) and exactly the "a name that
+    # looks like it's been here a while, but the thing you'd actually
+    # install is brand new" case the "recent" flag exists to catch.
+    non_yanked_upload_times = [
+        file_info["upload_time_iso_8601"]
+        for file_info in release_files
+        if "upload_time_iso_8601" in file_info and not file_info.get("yanked")
+    ]
+    age_days = _days_since(min(non_yanked_upload_times or upload_times))
     if age_days < _RECENT_DAYS:
         return LookupResult("recent", f"first published {age_days:.0f} days ago")
     return LookupResult("ok")

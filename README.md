@@ -1429,6 +1429,27 @@ value's shape, so a legitimate fork/local-path/private-tarball override
 on any of the three mechanisms was reported as a hallucinated `not_found`
 package.
 
+A PyPI package's "recent" age is now computed from its newest-released
+*non-yanked* file only, not the oldest file ever uploaded regardless of
+yanked status (fixed in v0.1.80). PEP 592 makes a real unqualified `pip
+install <name>` ignore every yanked file entirely (not just prefer a
+non-yanked one when there's a tie) — slopcheck already knew this well
+enough to report `not_found` when *every* release is yanked (v0.1.52),
+but a mix of yanked and non-yanked releases still computed the "how long
+has this existed" age from the single oldest upload across *all* files,
+yanked ones included. Confirmed live (pip 25.1.1, a from-scratch local
+index: `testpkg-1.0.0` marked `data-yanked`, `testpkg-1.0.1` not):
+`pip install --dry-run -i <index> testpkg` downloads and would install
+only `1.0.1`, never even considering `1.0.0`. A project whose only old
+release was yanked years ago and whose sole real, installable release
+was published days ago — exactly the shape a reused or taken-over PyPI
+project name can produce — used to report "ok" (the ancient yanked
+file's date won the `min()`), implying a long-established, installable
+package, when a real `pip install <name>` today resolves straight to the
+brand-new release and nothing else. Before this fix there was no
+distinction at all between a yanked file's upload date and a real one's
+for this calculation.
+
 ## Development
 
 ```bash
