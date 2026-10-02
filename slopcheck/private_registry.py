@@ -1024,6 +1024,105 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
     return blanket, explicit_dep_names
 
 
+def _pdm_config_paths(project_roots: list[Path]) -> list[Path]:
+    """Every file PDM itself reads for `pypi.*` settings, outside pyproject.toml.
+
+    PDM's own `pdm config` command (https://pdm-project.org/en/latest/usage/
+    config/#configuring-pypi-index) writes `pypi.url`/`pypi.<name>.url`
+    settings to one of *three* TOML files, none of which is pyproject.toml
+    and none of which `pdm_private_registry_context` read before this fix:
+
+    - a project-local `pdm.toml` at the project root (`pdm config -l`,
+      read directly from PDM 2.29.2's own `Project.project_config`:
+      `Config(self.root / "pdm.toml")`), plus the legacy `.pdm.toml` PDM
+      still merges in for backward compatibility (same source, the
+      `# TODO: for backward compatibility` block right below it) —
+      confirmed live: a from-scratch project with *only* a committed
+      `pdm.toml` containing `[pypi] url = "http://127.0.0.1:9/simple"` (no
+      `[[tool.pdm.source]]` anywhere in pyproject.toml) made `pdm lock`
+      genuinely attempt a connection to that address instead of
+      `pypi.org` (`ConnectError: [Errno 111] Connection refused`, the same
+      ConnectionRefused tell `poetry_private_registry_context`'s own
+      live-verification already uses).
+    - a per-user global config (`pdm config -g`), at
+      `platformdirs.user_config_path("pdm") / "config.toml"` — confirmed by
+      reading PDM's own source (`Config.site`/`get_defaults` in
+      `pdm/project/config.py`) and live: `platformdirs.user_config_path`
+      resolves to `$XDG_CONFIG_HOME/pdm` when that var is set to a
+      non-blank value, `~/.config/pdm` otherwise (the identical
+      non-blank-value XDG rule `_pip_user_config_dir`/`_uv_config_paths`
+      already apply for pip/uv's own per-user config), and a `pypi.url`
+      set only there (zero project-level config at all) was genuinely
+      honored by a real `pdm lock` the same way.
+    - a machine-wide config PDM's own `Config.site` reads from
+      `platformdirs.site_config_path("pdm") / "config.toml"`, which
+      resolves every directory in `$XDG_CONFIG_DIRS` (falling back to the
+      single default `/etc/xdg` when unset or blank) the same way
+      `_pip_site_config_dirs` already does for pip's own `/etc/xdg/pip`.
+
+    Before this fix, none of these three files -- nor the `PDM_PYPI_URL`
+    env var `pdm_private_registry_context` now also checks -- were read at
+    all, so a PDM project routing its default index through any of them
+    (a real, current, documented PDM feature, not a hypothetical one) had
+    every genuinely-resolvable private-only dependency reported as a plain
+    `not_found` hallucination -- the exact same blanket-override shape
+    already fixed here for pip's `pip.conf`/`PIP_INDEX_URL` and uv's
+    standalone `uv.toml`/`UV_INDEX_URL`, just never ported to PDM's own,
+    structurally distinct config-file mechanism.
+    """
+    paths = [root / "pdm.toml" for root in project_roots]
+    paths.extend(root / ".pdm.toml" for root in project_roots)
+    xdg_home = os.environ.get("XDG_CONFIG_HOME", "")
+    user_base = Path(xdg_home) if xdg_home.strip() else Path.home() / ".config"
+    paths.append(user_base / "pdm" / "config.toml")
+    xdg_dirs_raw = os.environ.get("XDG_CONFIG_DIRS", "")
+    site_dirs = xdg_dirs_raw.split(os.pathsep) if xdg_dirs_raw.strip() else ["/etc/xdg"]
+    paths.extend(Path(d) / "pdm" / "config.toml" for d in site_dirs)
+    return paths
+
+
+def _pdm_config_file_has_custom_source(path: Path) -> bool:
+    """Whether a PDM config TOML file (not pyproject.toml) names a non-default index.
+
+    PDM's `load_config` (`pdm/project/config.py`) flattens a nested
+    `[pypi]`/`[pypi.<name>]` table into dotted keys (`pypi.url`,
+    `pypi.<name>.url`, ...) -- `pdm config pypi.url <url>` writes the
+    former (overriding the single default index every dependency falls
+    back to), `pdm config pypi.<name>.url <url>` the latter (an
+    additional, PDM-own named source, confirmed live via `pdm config -g
+    pypi.myrepo.url ...` writing a `[pypi.myrepo]` sub-table). Either
+    shape is checked here the same conservative, whole-file way
+    `pdm_private_registry_context`'s `[[tool.pdm.source]]` check already
+    is: no attempt to model PDM's own per-name `include_packages`/
+    `exclude_packages` scoping (see that function's own docstring for why
+    that's deliberately left as a blanket signal instead).
+
+    A `pypi.url` set to a known-public PyPI mirror is compared against
+    `_is_public_pypi_url` the same way `pipfile_private_registry_context`
+    already treats Pipenv's own default-source URL, so simply re-stating
+    the real default in a committed `pdm.toml` (a harmless, real pattern
+    -- `pdm config -l pypi.url https://pypi.org/simple`) doesn't itself
+    trigger a blanket `private` downgrade for an otherwise perfectly
+    ordinary project.
+    """
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return False
+    pypi = data.get("pypi")
+    if not isinstance(pypi, dict):
+        return False
+    url = pypi.get("url")
+    if isinstance(url, str) and url and not _is_public_pypi_url(url):
+        return True
+    for key, value in pypi.items():
+        if key == "url":
+            continue
+        if isinstance(value, dict) and isinstance(value.get("url"), str) and value["url"]:
+            return True
+    return False
+
+
 def pdm_private_registry_context(pyproject_paths: list[Path]) -> bool:
     """Whether PDM, run for real, would consult something beyond public PyPI.
 
@@ -1057,7 +1156,26 @@ def pdm_private_registry_context(pyproject_paths: list[Path]) -> bool:
     configured`'s plain whole-scan bool: any `[[tool.pdm.source]]` table
     present at all means PDM could resolve a name beyond public PyPI for this
     scan.
+
+    `PDM_PYPI_URL` (https://pdm-project.org/en/latest/usage/config/#common-configuration-items,
+    PDM's own `pypi.url` config item's documented env-var equivalent, read
+    directly from `pdm/project/config.py`'s `_config_map`) and the three
+    `pdm config`-written TOML files `_pdm_config_paths` checks are a
+    *seventh*, entirely separate way PDM routes resolution beyond public
+    PyPI, with zero `[[tool.pdm.source]]` (or any other pyproject.toml
+    table) involved at all — see `_pdm_config_paths`'/`_pdm_config_file_
+    has_custom_source`'s own docstrings for the live-verified gap this
+    closes. Confirmed live the env var works the same way: `PDM_PYPI_URL=
+    http://127.0.0.1:9/simple pdm lock`, zero config files anywhere,
+    genuinely attempted that address instead of `pypi.org`.
     """
+    if os.environ.get("PDM_PYPI_URL") and not _is_public_pypi_url(os.environ["PDM_PYPI_URL"]):
+        return True
+
+    for path in _pdm_config_paths([p.parent for p in pyproject_paths]):
+        if path.is_file() and _pdm_config_file_has_custom_source(path):
+            return True
+
     for path in pyproject_paths:
         if not path.is_file():
             continue

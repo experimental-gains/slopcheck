@@ -2329,18 +2329,22 @@ def test_uv_sources_list_form_ignores_non_table_entries(tmp_path: Path, monkeypa
     assert explicit_names == {"totally-fake-pkg"}
 
 
-def test_pdm_no_source_table_is_not_private(tmp_path: Path):
+def test_pdm_no_source_table_is_not_private(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
 
     assert pdm_private_registry_context([pyproject]) is False
 
 
-def test_pdm_plain_source_is_blanket(tmp_path: Path):
+def test_pdm_plain_source_is_blanket(tmp_path: Path, monkeypatch):
     """Confirmed live (`pdm lock` under PDM 2.29.2, real unreachable
     `127.0.0.1:9` source): a `[[tool.pdm.source]]` table with no
     include_packages/exclude_packages is genuinely contacted for every
     dependency, not just ones matching some pattern."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
         '[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n'
@@ -2352,12 +2356,14 @@ def test_pdm_plain_source_is_blanket(tmp_path: Path):
     assert pdm_private_registry_context([pyproject]) is True
 
 
-def test_pdm_include_packages_does_not_narrow_the_blanket(tmp_path: Path):
+def test_pdm_include_packages_does_not_narrow_the_blanket(tmp_path: Path, monkeypatch):
     """Confirmed live: setting `include_packages` on a source does not stop
     it from also being consulted for a name that doesn't match the pattern
     — PDM's own `_source_preference` only *adds* an exclusive claim for
     matching names, it never removes the source's default candidacy for
     everything else. Still blanket, same as the plain case above."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
         '[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n'
@@ -2370,26 +2376,179 @@ def test_pdm_include_packages_does_not_narrow_the_blanket(tmp_path: Path):
     assert pdm_private_registry_context([pyproject]) is True
 
 
-def test_pdm_missing_file_is_not_an_error(tmp_path: Path):
+def test_pdm_missing_file_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     assert pdm_private_registry_context([tmp_path / "pyproject.toml"]) is False
 
 
-def test_pdm_malformed_toml_is_not_an_error(tmp_path: Path):
+def test_pdm_malformed_toml_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("not valid toml [[[")
 
     assert pdm_private_registry_context([pyproject]) is False
 
 
-def test_pdm_non_dict_tool_pdm_section_is_ignored(tmp_path: Path):
+def test_pdm_non_dict_tool_pdm_section_is_ignored(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text('[project]\nname = "x"\n\n[tool]\npdm = "not-a-table"\n')
 
     assert pdm_private_registry_context([pyproject]) is False
 
 
-def test_pdm_non_list_source_is_ignored(tmp_path: Path):
+def test_pdm_non_list_source_is_ignored(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text('[project]\nname = "x"\n\n[tool.pdm]\nsource = "not-a-list"\n')
+
+    assert pdm_private_registry_context([pyproject]) is False
+
+
+def _clear_pdm_env(monkeypatch) -> None:
+    for var in ("PDM_PYPI_URL", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_pdm_env_var_is_blanket(tmp_path: Path, monkeypatch):
+    """Confirmed live: `PDM_PYPI_URL=http://127.0.0.1:9/simple pdm lock`, with
+    zero `[[tool.pdm.source]]` anywhere and no config file at all, genuinely
+    attempted that address instead of pypi.org (PDM_PYPI_URL is `pypi.url`'s
+    own documented env-var equivalent, read straight from PDM's own
+    `_config_map`)."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    monkeypatch.setenv("PDM_PYPI_URL", "http://127.0.0.1:9/simple")
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n')
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_env_var_set_to_public_pypi_is_not_blanket(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    monkeypatch.setenv("PDM_PYPI_URL", "https://pypi.org/simple")
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+
+    assert pdm_private_registry_context([pyproject]) is False
+
+
+def test_pdm_project_local_pdm_toml_is_blanket(tmp_path: Path, monkeypatch):
+    """Confirmed live: a committed `pdm.toml` at the project root with
+    `[pypi] url = ...` and zero `[[tool.pdm.source]]` anywhere in
+    pyproject.toml made a real `pdm lock` genuinely attempt a connection to
+    that address instead of pypi.org."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n')
+    (tmp_path / "pdm.toml").write_text('[pypi]\nurl = "http://127.0.0.1:9/simple"\n')
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_legacy_dot_pdm_toml_is_blanket(tmp_path: Path, monkeypatch):
+    """PDM still merges in the legacy `.pdm.toml` (pre-`pdm.toml`) project
+    config file for backward compatibility -- confirmed by reading PDM
+    2.29.2's own `Project.project_config` directly."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n')
+    (tmp_path / ".pdm.toml").write_text('[pypi]\nurl = "http://127.0.0.1:9/simple"\n')
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_global_config_toml_is_blanket(tmp_path: Path, monkeypatch):
+    """Confirmed live: `pdm config -g pypi.url ...` writes
+    `$XDG_CONFIG_HOME/pdm/config.toml` (or `~/.config/pdm/config.toml`), and
+    a real `pdm lock` with zero project-level config anywhere genuinely
+    honored it the same way."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    config_dir = tmp_path / "xdgconfig"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir))
+    (config_dir / "pdm").mkdir(parents=True)
+    (config_dir / "pdm" / "config.toml").write_text('[pypi]\nurl = "http://127.0.0.1:9/simple"\n')
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n')
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_global_config_falls_back_to_home_when_xdg_unset(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    config_file = home / ".config" / "pdm" / "config.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text('[pypi]\nurl = "http://127.0.0.1:9/simple"\n')
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n')
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_site_config_toml_is_blanket(tmp_path: Path, monkeypatch):
+    """PDM's own `Config.site` reads `platformdirs.site_config_path("pdm")`,
+    which honors `$XDG_CONFIG_DIRS` (falling back to `/etc/xdg`) the same
+    way `_pip_site_config_dirs` already does for pip."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    site_dir = tmp_path / "customsite"
+    monkeypatch.setenv("XDG_CONFIG_DIRS", str(site_dir))
+    (site_dir / "pdm").mkdir(parents=True)
+    (site_dir / "pdm" / "config.toml").write_text('[pypi]\nurl = "http://127.0.0.1:9/simple"\n')
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n')
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_config_pypi_url_set_to_public_pypi_is_not_blanket(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+    (tmp_path / "pdm.toml").write_text('[pypi]\nurl = "https://pypi.org/simple"\n')
+
+    assert pdm_private_registry_context([pyproject]) is False
+
+
+def test_pdm_config_named_extra_source_is_blanket(tmp_path: Path, monkeypatch):
+    """`pdm config pypi.<name>.url <url>` (confirmed live) writes a
+    `[pypi.<name>]` sub-table -- an additional, PDM-own named source
+    distinct from overriding the single default `pypi.url`."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["acmecorp-internal-widget"]\n')
+    (tmp_path / "pdm.toml").write_text('[pypi.myrepo]\nurl = "http://127.0.0.1:9/simple"\n')
+
+    assert pdm_private_registry_context([pyproject]) is True
+
+
+def test_pdm_config_file_missing_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+
+    assert pdm_private_registry_context([pyproject]) is False
+
+
+def test_pdm_config_file_malformed_is_not_an_error(tmp_path: Path, monkeypatch):
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["requests"]\n')
+    (tmp_path / "pdm.toml").write_text("not valid toml [[[")
 
     assert pdm_private_registry_context([pyproject]) is False
