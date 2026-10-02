@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.85
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.86
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.85
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.86
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.85
+    rev: v0.1.86
     hooks:
       - id: slopcheck
 ```
@@ -1551,6 +1551,28 @@ manifests), misreporting a genuinely-resolvable dependency as a plain
 `not_found` hallucination instead of downgraded to `private`. A
 directory excluded from the workspace via `[tool.uv.workspace].exclude`
 correctly does *not* get this treatment, confirmed live the same way.
+
+Pipenv's `PIPENV_PYPI_MIRROR` environment variable is now recognized too
+(fixed in v0.1.86) — a *fifth* mechanism for a `Pipfile`-based project to
+resolve beyond public PyPI, entirely outside the `Pipfile` itself and
+separate from the `[[source]]` table this tool already handled. Reading
+Pipenv's own source (`pipenv/utils/sources.py`'s `pipfile_sources`): when
+set, this env var overwrites the `url` of every source whose current
+`url` is public PyPI — including the implicit built-in default used when
+a `Pipfile` has no `[[source]]` table at all. Confirmed live (real
+`pipenv lock` under Pipenv 2026.8.0, two arrangements, watching for a
+`127.0.0.1:9` connection attempt): a `Pipfile` with the conventional
+`name = "pypi", url = "https://pypi.org/simple"` as its only source, and
+a `Pipfile` with no `[[source]]` table at all, both genuinely routed an
+undecorated dependency's resolution to the mirror's address instead of
+pypi.org — the same mirror/caching-proxy pattern pip's `PIP_INDEX_URL`
+and PDM's `PDM_PYPI_URL` already get folded into this tool's blanket
+signal. Before this fix, neither case was recognized, so a Pipenv
+project run with this env var set (a real, documented pattern — an
+offline/airgapped CI image or a company-wide caching mirror baked into
+the environment rather than repeated per project) had every
+genuinely-resolvable dependency reported as a plain `not_found`
+hallucination instead of downgraded to `private`.
 
 ## Development
 
