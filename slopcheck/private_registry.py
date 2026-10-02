@@ -883,7 +883,7 @@ def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, s
     return blanket, explicit_names
 
 
-_UV_ENV_BLANKET_VARS = ("UV_INDEX", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL")
+_UV_ENV_BLANKET_VARS = ("UV_INDEX", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_FIND_LINKS")
 
 
 def _uv_config_paths(project_roots: list[Path]) -> list[Path]:
@@ -922,6 +922,28 @@ def _uv_index_entries(data: dict) -> list[dict]:
     return [entry for entry in entries if isinstance(entry, dict)]
 
 
+def _uv_has_find_links(data: dict) -> bool:
+    # `find-links` (https://docs.astral.sh/uv/reference/settings/#find-links)
+    # is uv's own analog of pip's `-f`/`--find-links`: a list of flat file/
+    # HTML-page/local-directory sources searched *in addition to* the
+    # configured index(es) — the same real, separate-from-any-index
+    # resolution path `_PIP_DIRECTIVE_RE`'s own comment documents for pip,
+    # just reachable through uv's config instead of a requirements.txt line
+    # or pip.conf. Confirmed live (uv 0.12.19, a hand-built wheel for a
+    # never-published name dropped in a throwaway local directory, no
+    # `[[tool.uv.index]]`/`uv.toml` index entry anywhere): both a
+    # `find-links = [...]` key directly in a standalone `uv.toml` and the
+    # identical key inside pyproject.toml's `[tool.uv]` table made `uv lock`
+    # genuinely resolve that exact name straight from the local directory,
+    # with real PyPI (`uv lock` run online, no find-links) failing the same
+    # name with "was not found in the package registry". Unlike `[[tool.uv.
+    # index]]`, this key has no `explicit`/scoped form at all -- every entry
+    # applies to the whole resolution, the same blanket shape as pip's
+    # `find-links`, so this only ever contributes to `blanket`, never to a
+    # per-name scoped set.
+    return bool(data.get("find-links"))
+
+
 def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[str]]:
     """Returns (blanket, names pinned to an explicit uv index).
 
@@ -942,6 +964,12 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
     live, the warning names only `index` among `[tool.uv]`'s fields as
     overridden — so it's always read from pyproject.toml regardless of
     which file supplied the matching index *name*.
+
+    A `find-links` key in either file is also checked, folding into
+    `blanket` the same way `UV_FIND_LINKS` already does below — see
+    `_uv_has_find_links`'s own comment for the live-verified gap this closes
+    (uv's own analog of pip's `-f`/`--find-links`, previously unhandled here
+    even though the equivalent pip directive was already fixed).
     """
     blanket = any(os.environ.get(var) for var in _UV_ENV_BLANKET_VARS)
     explicit_index_names: set[str] = set()
@@ -966,6 +994,8 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
         except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
             continue
         _collect(_uv_index_entries(data))
+        if _uv_has_find_links(data):
+            blanket = True
 
     for path in pyproject_paths:
         if not path.is_file():
@@ -978,6 +1008,8 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
         if not isinstance(uv, dict):
             continue
         _collect(_uv_index_entries(uv))
+        if _uv_has_find_links(uv):
+            blanket = True
 
         if not explicit_index_names:
             continue

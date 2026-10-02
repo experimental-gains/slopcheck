@@ -1831,6 +1831,82 @@ def test_uv_env_var_is_blanket(tmp_path: Path, monkeypatch):
     assert blanket is True
 
 
+def test_uv_find_links_env_var_is_blanket(tmp_path: Path, monkeypatch):
+    """`UV_FIND_LINKS` is uv's own env var equivalent of a `find-links`
+    config key — confirmed live (uv 0.12.19, a hand-built wheel for a
+    never-published name in a throwaway local directory, no `[[index]]`/
+    `[[tool.uv.index]]` anywhere): setting only `UV_FIND_LINKS=<that
+    directory>` made a real `uv lock` genuinely resolve the name straight
+    from it, the same way `PIP_FIND_LINKS` already does for pip."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("UV_FIND_LINKS", "/path/to/local-wheels")
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n')
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_uv_find_links_in_pyproject_is_blanket(tmp_path: Path, monkeypatch):
+    """`[tool.uv] find-links = [...]` is uv's own analog of pip's
+    `-f`/`--find-links` — a flat local-directory/HTML-page source searched
+    *in addition to* any configured index, not scoped by `[tool.uv.sources]`
+    the way an `explicit = true` index entry is. Confirmed live (uv 0.12.19):
+    a project with this key and no index/source config at all still
+    resolved a name absent from public PyPI straight from the named
+    directory. Before this fix, `uv_private_registry_context` had no
+    `find-links` handling at all — the same gap already fixed for pip's own
+    `-f`/`--find-links` (see `_PIP_DIRECTIVE_RE`) — so this genuinely
+    private-only dependency was reported as a plain `not_found`
+    hallucination instead of downgraded to `private`."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[tool.uv]\n"
+        'find-links = ["/path/to/local-wheels"]\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+    assert explicit_names == set()
+
+
+def test_uv_find_links_in_standalone_uv_toml_is_blanket(tmp_path: Path, monkeypatch):
+    """Same `find-links` gap as `test_uv_find_links_in_pyproject_is_blanket`,
+    but set in a standalone `uv.toml` instead — confirmed live the same way,
+    zero `[tool.uv]` section in pyproject.toml at all."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n')
+    (tmp_path / "uv.toml").write_text('find-links = ["/path/to/local-wheels"]\n')
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_uv_find_links_empty_list_is_not_blanket(tmp_path: Path, monkeypatch):
+    """An empty `find-links = []` (the default shape, equivalent to the key
+    being absent) shouldn't be treated as a private-registry signal."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["requests"]\n\n[tool.uv]\nfind-links = []\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is False
+    assert explicit_names == set()
+
+
 def test_uv_config_paths_uses_xdg_config_home_when_set(tmp_path: Path, monkeypatch):
     _clear_uv_env(monkeypatch)
     monkeypatch.setenv("HOME", str(tmp_path))
