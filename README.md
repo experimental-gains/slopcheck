@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.86
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.87
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.86
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.87
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.86
+    rev: v0.1.87
     hooks:
       - id: slopcheck
 ```
@@ -1573,6 +1573,27 @@ offline/airgapped CI image or a company-wide caching mirror baked into
 the environment rather than repeated per project) had every
 genuinely-resolvable dependency reported as a plain `not_found`
 hallucination instead of downgraded to `private`.
+
+uv's older, pip-compatible flat `index-url`/`extra-index-url` keys are
+now recognized too (fixed in v0.1.87). Before uv grew the
+`[[tool.uv.index]]` array, it modeled a blanket default/extra index the
+same flat way pip does — a single `index-url = "..."` string and an
+`extra-index-url = [...]` list, settable at the top level of either a
+standalone `uv.toml` or a pyproject.toml's `[tool.uv]` table. uv's own
+settings reference marks both "Deprecated: use `index` instead" —
+deprecated, not removed. Confirmed live with real uv 0.12.19, three
+ways: a pyproject.toml's `[tool.uv]` table with only `index-url` set
+and no `[[tool.uv.index]]` entry at all; the same table with only
+`extra-index-url` set; and a standalone `uv.toml` with only
+`index-url` set and zero `[tool.uv]` section in pyproject.toml — all
+three made a real `uv lock -v` genuinely issue a GET against the
+configured address for a dependency name that 404s on the real public
+PyPI JSON API, instead of leaving it unresolved. Before this fix,
+either deprecated key (still a real, current pattern — uv's own docs
+keep documenting it as a working pip-compatible shorthand, e.g. for
+pinning a PyTorch CPU wheel index) left every genuinely-resolvable
+private/extra dependency reported as a plain `not_found` hallucination
+instead of downgraded to `private`.
 
 ## Development
 
