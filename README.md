@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.79
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.81
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.79
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.81
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.79
+    rev: v0.1.81
     hooks:
       - id: slopcheck
 ```
@@ -1449,6 +1449,22 @@ package, when a real `pip install <name>` today resolves straight to the
 brand-new release and nothing else. Before this fix there was no
 distinction at all between a yanked file's upload date and a real one's
 for this calculation.
+
+pip's `-f`/`--find-links` (a flat file/HTML-page/local-directory source
+of archives, searched *in addition to* the configured index) is now
+recognized as a private/extra source, in every spelling pip itself
+accepts: a requirements.txt line (`-f /path`, `-f/path`, or
+`--find-links=/path`), the `PIP_FIND_LINKS` env var, and `pip.conf`'s
+`find-links`/`find_links` (fixed in v0.1.81). Confirmed live (pip
+25.1.1): a real wheel built for a never-published name and dropped in a
+throwaway local directory let `pip install --dry-run -r` genuinely find
+and "Would install" it via `-f`, while the public PyPI JSON API 404'd
+the same name throughout — a real pattern for airgapped CI or a
+vendored-wheels directory committed alongside a project. Before this
+fix, slopcheck had no notion of `-f`/`--find-links` at all, so a
+dependency resolvable this way reported as a plain `not_found`
+hallucination instead of downgrading to `private`, the same
+misclassification already fixed for `-i`/`--extra-index-url`.
 
 ## Development
 
