@@ -1993,6 +1993,72 @@ def test_uv_find_links_empty_list_is_not_blanket(tmp_path: Path, monkeypatch):
     assert explicit_names == set()
 
 
+def test_uv_deprecated_index_url_in_pyproject_is_blanket(tmp_path: Path, monkeypatch):
+    """`[tool.uv] index-url = "..."` is uv's own deprecated-but-still-live
+    pip-compatible alias for the modern `[[tool.uv.index]]` array (uv's own
+    settings reference: "Deprecated: use `index` instead" -- deprecated, not
+    removed). Confirmed live (uv 0.12.19): a pyproject.toml with *only* this
+    top-level key (no `[[tool.uv.index]]` entry at all) and a dependency
+    name that 404s on the real public PyPI JSON API made a real `uv lock -v`
+    genuinely issue a GET against the configured `http://127.0.0.1:9/simple`
+    address for that exact name (`Connection refused`, the same tell every
+    other live-verification in this file uses), instead of leaving it
+    unresolved. Before this fix, `_uv_index_entries`/`uv_private_registry_
+    context` only ever read the `index`/`[[tool.uv.index]]` array key --
+    this older, still-functional sibling key was invisible, so a project
+    using it had every genuinely-resolvable private dependency reported as
+    a plain `not_found` hallucination instead of downgraded to `private`."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[tool.uv]\n"
+        'index-url = "https://pypi.internal.example/simple"\n'
+    )
+
+    blanket, explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+    assert explicit_names == set()
+
+
+def test_uv_deprecated_extra_index_url_in_pyproject_is_blanket(tmp_path: Path, monkeypatch):
+    """Same deprecated-alias gap as `test_uv_deprecated_index_url_in_
+    pyproject_is_blanket`, for `extra-index-url = [...]` (the top-level
+    list-form alias of `[[tool.uv.index]]` with no `explicit`/`default`,
+    uv's own pip-compatible equivalent of `--extra-index-url`). Confirmed
+    live the same way: a real `uv lock -v` genuinely issued a GET against
+    the configured address for a dependency absent from public PyPI."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n'
+        "\n[tool.uv]\n"
+        'extra-index-url = ["https://pypi.internal.example/simple"]\n'
+    )
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
+def test_uv_deprecated_index_url_in_standalone_uv_toml_is_blanket(tmp_path: Path, monkeypatch):
+    """Same gap as `test_uv_deprecated_index_url_in_pyproject_is_blanket`,
+    set in a standalone `uv.toml` instead -- confirmed live the same way,
+    zero `[tool.uv]` section in pyproject.toml at all."""
+    _clear_uv_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\ndependencies = ["totally-fake-pkg"]\n')
+    (tmp_path / "uv.toml").write_text('index-url = "https://pypi.internal.example/simple"\n')
+
+    blanket, _explicit_names = uv_private_registry_context([pyproject])
+
+    assert blanket is True
+
+
 def test_uv_config_paths_uses_xdg_config_home_when_set(tmp_path: Path, monkeypatch):
     _clear_uv_env(monkeypatch)
     monkeypatch.setenv("HOME", str(tmp_path))

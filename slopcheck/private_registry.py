@@ -977,6 +977,40 @@ def _uv_has_find_links(data: dict) -> bool:
     return bool(data.get("find-links"))
 
 
+def _uv_has_deprecated_index_url(data: dict) -> bool:
+    """Whether uv's older, pip-compatible `index-url`/`extra-index-url` keys are set.
+
+    Before uv grew the `[[tool.uv.index]]` array (what `_uv_index_entries`
+    reads), it modeled a blanket default/extra index the same flat way pip
+    does: a single `index-url = "..."` string and an `extra-index-url =
+    [...]` list, settable at the top level of either a standalone `uv.toml`
+    or a pyproject.toml's `[tool.uv]` table. uv's own settings reference
+    marks both "Deprecated: use `index` instead" — deprecated, not removed
+    or ignored, and `_uv_index_entries`/`uv_private_registry_context` never
+    read either one, only the newer array form.
+
+    Confirmed live with real uv 0.12.19, three ways, all genuinely issuing a
+    GET for a dependency name that 404s on the real public PyPI JSON API
+    against `http://127.0.0.1:9/simple` (connection-refused, the same tell
+    every other live-verification in this file uses) instead of leaving it
+    unresolved: a pyproject.toml's `[tool.uv]` table with only `index-url`
+    set and no `[[tool.uv.index]]` entry at all; the same table with only
+    `extra-index-url` set; and a standalone `uv.toml` with only `index-url`
+    set and zero `[tool.uv]` section in pyproject.toml. A negative control
+    with neither key set anywhere resolved the identical dependency-name
+    shape as a plain 404, confirming the redirection was genuinely caused by
+    these keys and not some other default. Before this fix, a project using
+    either deprecated key (a real, still-current pattern — `uv`'s own docs
+    keep documenting it as a working pip-compatible shorthand, e.g. for
+    pinning a PyTorch CPU wheel index) had every genuinely-resolvable
+    private/extra dependency reported as a plain `not_found` hallucination
+    instead of downgraded to `private`. Like `_uv_has_find_links`, this has
+    no `explicit`/scoped form — both keys always apply to the whole
+    resolution, so this only ever contributes to `blanket`.
+    """
+    return bool(data.get("index-url")) or bool(data.get("extra-index-url"))
+
+
 def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[str]]:
     """Returns (blanket, names pinned to an explicit uv index).
 
@@ -1003,6 +1037,12 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
     `_uv_has_find_links`'s own comment for the live-verified gap this closes
     (uv's own analog of pip's `-f`/`--find-links`, previously unhandled here
     even though the equivalent pip directive was already fixed).
+
+    uv's older, deprecated-but-still-functional `index-url`/`extra-index-url`
+    keys (the pip-compatible flat predecessor of `[[tool.uv.index]]`) are
+    also checked in either file, folding into `blanket` the same way —
+    see `_uv_has_deprecated_index_url`'s own comment for the live-verified
+    gap this closes.
 
     A scanned pyproject.toml that's actually a uv workspace *member* (not
     the workspace root itself) also pulls in its enclosing workspace root's
@@ -1047,6 +1087,8 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
         _collect(_uv_index_entries(data))
         if _uv_has_find_links(data):
             blanket = True
+        if _uv_has_deprecated_index_url(data):
+            blanket = True
 
     parsed_uv_tables: list[dict] = []
     for path in all_pyproject_paths:
@@ -1062,6 +1104,8 @@ def uv_private_registry_context(pyproject_paths: list[Path]) -> tuple[bool, set[
         parsed_uv_tables.append(uv)
         _collect(_uv_index_entries(uv))
         if _uv_has_find_links(uv):
+            blanket = True
+        if _uv_has_deprecated_index_url(uv):
             blanket = True
 
     if explicit_index_names:
