@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.81
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.82
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.81
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.82
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.81
+    rev: v0.1.82
     hooks:
       - id: slopcheck
 ```
@@ -1465,6 +1465,23 @@ fix, slopcheck had no notion of `-f`/`--find-links` at all, so a
 dependency resolvable this way reported as a plain `not_found`
 hallucination instead of downgrading to `private`, the same
 misclassification already fixed for `-i`/`--extra-index-url`.
+
+uv's own `find-links` setting — its analog of pip's `-f`/`--find-links`
+above, a list of flat file/HTML-page/local-directory sources searched
+alongside any configured index — is now recognized too, however it's
+set: the `UV_FIND_LINKS` env var, a `find-links = [...]` key in a
+standalone `uv.toml`, or the same key in pyproject.toml's `[tool.uv]`
+table (fixed in v0.1.82). Confirmed live (uv 0.12.19): a hand-built
+wheel for a never-published name, dropped in a throwaway local
+directory and named only via `find-links`, made a real `uv lock`
+genuinely resolve and lock it, while the same name failed with "was not
+found in the package registry" against real PyPI with no `find-links`
+configured. Before this fix, `uv_private_registry_context` checked only
+uv's `[[index]]`/`[[tool.uv.index]]` tables and their env var
+equivalents, so a project relying solely on `find-links` had every
+genuinely-resolvable dependency it named reported as a plain `not_found`
+hallucination instead of downgraded to `private` — the same
+cross-ecosystem gap already closed for pip just above.
 
 ## Development
 
