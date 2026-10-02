@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.82
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.83
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.82
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.83
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.82
+    rev: v0.1.83
     hooks:
       - id: slopcheck
 ```
@@ -1482,6 +1482,30 @@ equivalents, so a project relying solely on `find-links` had every
 genuinely-resolvable dependency it named reported as a plain `not_found`
 hallucination instead of downgraded to `private` — the same
 cross-ecosystem gap already closed for pip just above.
+
+Hatch's `overrides` table is now read too (fixed in v0.1.83): on top of
+the plain `dependencies`/`extra-dependencies` fields a named
+`[tool.hatch.envs.<name>]` already carries, Hatch lets that same
+environment inject *more* dependencies via
+`overrides.<source>.<condition>.dependencies`/`extra-dependencies`,
+where `source` is one of `platform`/`env`/`matrix`/`name`
+(https://hatch.pypa.io/latest/config/environment/advanced/#overrides).
+Confirmed live (Hatch 1.18.1): a scratch project with
+`[tool.hatch.envs.test.overrides] matrix.pyver.dependencies = [{value =
+"totally-hallucinated-hatch-override-xyz-999", if = ["a"]}]` made `hatch
+env create test.a` genuinely fail resolving the fake name from PyPI
+("Could not find a version that satisfies the requirement
+totally-hallucinated-hatch-override-xyz-999 (from versions: none)"),
+while `hatch env create test.b` (the matrix variant whose `if` condition
+doesn't match) installed cleanly — confirming the entry is genuinely
+condition-gated at runtime. slopcheck deliberately doesn't try to
+evaluate that gating itself (it can't know which platform/env/matrix
+variant a real invocation will use), so every entry under every
+source/condition is checked unconditionally. Before this fix,
+`_hatch_deps` never read `overrides` at all, so a hallucinated name
+planted there — invisible in the environment's own plain `dependencies`
+list — sailed through unchecked even though a real `hatch env create`
+genuinely tries to install it.
 
 ## Development
 
