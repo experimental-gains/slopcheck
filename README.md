@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.78
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.79
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.78
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.79
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.78
+    rev: v0.1.79
     hooks:
       - id: slopcheck
 ```
@@ -1406,6 +1406,28 @@ Yarn's install ever reaches its Fetch step — and made zero requests to
 fix, slopcheck sent the literal name to the npm registry and reported it
 a plain `not_found` hallucination — a false positive on a dependency a
 real `yarn install` never asks the registry about at all.
+
+npm's `overrides` (and its `pnpm.overrides` alias), pnpm-workspace.yaml's
+own top-level `overrides:`, and Yarn's `resolutions` no longer check a
+name against the registry when its override/resolution *value* is a
+`file:`/git-URL/tarball-URL specifier instead of a version, range, or
+`npm:` alias (fixed in v0.1.79). All three real mechanisms accept such a
+value — npm's own docs list "an exact version, a semver range, a dist-tag,
+or a replacement specifier such as `npm:`, `file:`, or a Git URL" — and
+when it's used, the package is fetched straight from that location,
+never touching the registry for its name at all. Confirmed live across
+all three tools: npm 12.2.0 (`{"wrappy": "file:./local-fork"}`, `npm
+install --dry-run -v` fetched only the other direct dependency, never
+`wrappy`), pnpm 12.8.1 (`overrides: {wrappy: 'http://127.0.0.1:8911/
+wrappy-1.0.2.tgz'}`, zero requests to `registry.npmjs.org` for it), and
+Yarn Classic 1.22.22 (`"resolutions": {"wrappy": "file:./local-fork"}`,
+resolved straight from the path). A real example of this shape in active
+use: withastro/astro's own `pnpm-workspace.yaml` pins `'docs>
+@lunariajs/core'` to a `pkg.pr.new` tarball URL today. Before this fix,
+the override/resolution name was always checked regardless of the
+value's shape, so a legitimate fork/local-path/private-tarball override
+on any of the three mechanisms was reported as a hallucinated `not_found`
+package.
 
 ## Development
 

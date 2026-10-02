@@ -1529,13 +1529,26 @@ def _npm_overrides_deps(overrides: dict) -> list[str]:
     another package name one level further down the chain. Both the outer
     and nested keys are real package names that belong on npm and can
     just as easily be hallucinated as a top-level dependency.
+
+    A string value can also be a `file:`/git-URL/tarball-URL specifier
+    (npm's own docs: overrides values accept "an exact version, a semver
+    range, a dist-tag, or a replacement specifier such as npm:, file:, or
+    a Git URL") — confirmed live (npm 12.2.0): `{"wrappy": "file:./local-
+    fork"}` makes `npm install --dry-run -v` fetch only the *other* direct
+    dependency from the registry, never `wrappy`, which is copied straight
+    from the path instead. The key's name never reaches the registry in
+    that case, so it must be skipped the same way a non-registry
+    `dependencies` value already is, not sent in as a plain name to check.
     """
     names = []
     for name, value in overrides.items():
         if name == ".":
             continue
-        if isinstance(value, str) and value.startswith(_NPM_ALIAS_PREFIX):
-            names.append(_npm_alias_target(value))
+        if isinstance(value, str):
+            if value.startswith(_NPM_ALIAS_PREFIX):
+                names.append(_npm_alias_target(value))
+            elif not _npm_non_registry_version(value):
+                names.append(_strip_version_suffix(name))
         else:
             names.append(_strip_version_suffix(name))
         if isinstance(value, dict):
@@ -1984,10 +1997,16 @@ def parse_package_json(path: Path) -> list[Dependency]:
     # target already matched the key's own name in every real example found
     # (jest's own package.json), so there's no live-verified case yet where
     # unwrapping it further would change which name gets checked.
+    # A value can also be a `file:`/git-URL/tarball-URL specifier instead of
+    # a version/range/npm: alias — confirmed live (Yarn Classic 1.22.22):
+    # `{"wrappy": "file:./local-fork"}` resolves `wrappy` straight from the
+    # path, never querying registry.yarnpkg.com for it at all. The pattern's
+    # name never reaches the registry in that case, so it's skipped the same
+    # way a non-registry `dependencies`/`overrides` value already is.
     for pattern, value in data.get("resolutions", {}).items():
         if isinstance(value, str) and value.startswith(_NPM_ALIAS_PREFIX):
             deps.append(Dependency(_npm_alias_target(value), "npm", str(path)))
-        else:
+        elif not (isinstance(value, str) and _npm_non_registry_version(value)):
             deps.append(Dependency(_yarn_resolution_target(pattern), "npm", str(path)))
     return deps
 
@@ -2236,7 +2255,11 @@ def _pnpm_workspace_override_names(overrides: dict[str, str]) -> list[str]:
     entirely rather than overriding its version) is skipped outright: real pnpm never
     fetches a removed dependency, so checking the key's name here would be checking
     something pnpm has deliberately made irrelevant to this install, not a hallucination
-    risk.
+    risk. A value can likewise be a `file:`/git-URL/tarball-URL specifier -- confirmed
+    live (pnpm 12.8.1): `overrides: {wrappy: 'http://127.0.0.1:8911/wrappy-1.0.2.tgz'}`
+    resolves `wrappy` purely by URL, with zero requests to registry.npmjs.org for it --
+    same as `_npm_overrides_deps` and the Yarn `resolutions` reader, this must be skipped
+    rather than checked under the key's own name.
 
     Before this fix, `_parse_pnpm_workspace_yaml` discarded a `pnpm-workspace.yaml`'s
     entire body unconditionally -- it existed only so `find_manifests`/`parse_manifest`
@@ -2253,7 +2276,7 @@ def _pnpm_workspace_override_names(overrides: dict[str, str]) -> list[str]:
             continue
         if value.startswith(_NPM_ALIAS_PREFIX):
             names.append(_npm_alias_target(value))
-        else:
+        elif not _npm_non_registry_version(value):
             names.append(_strip_version_suffix(key.rsplit(">", 1)[-1]))
     return names
 

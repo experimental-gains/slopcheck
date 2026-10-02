@@ -326,6 +326,28 @@ def test_parse_manifest_reads_pnpm_workspace_yaml_overrides(tmp_path: Path):
     assert "lodash" not in names
 
 
+def test_parse_manifest_pnpm_workspace_yaml_overrides_skips_non_registry_value(tmp_path: Path):
+    # Confirmed live (pnpm 12.8.1): overrides: {wrappy: 'http://127.0.0.1
+    # :8911/wrappy-1.0.2.tgz'} resolved "wrappy" purely by URL -- an HTTP
+    # server log showed zero requests to registry.npmjs.org for it at
+    # all. Before this fix, the override key was always checked against
+    # the registry, so a legitimate tarball-URL/file:/git: override got
+    # reported as a hallucinated package.
+    path = tmp_path / "pnpm-workspace.yaml"
+    path.write_text(
+        "packages:\n"
+        "  - 'packages/*'\n"
+        "overrides:\n"
+        "  wrappy: 'http://127.0.0.1:8911/wrappy-1.0.2.tgz'\n"
+        "  foo: '^1.0.0'\n"
+    )
+
+    names = {dep.name for dep in parse_manifest(path)}
+
+    assert names == {"foo"}
+    assert "wrappy" not in names
+
+
 def test_parse_manifest_pnpm_workspace_yaml_with_no_overrides_key_is_empty(tmp_path: Path):
     path = tmp_path / "pnpm-workspace.yaml"
     path.write_text("packages:\n  - 'packages/*'\n")
@@ -614,6 +636,36 @@ def test_parse_package_json_resolves_npm_alias_target(tmp_path: Path):
     assert names == {"lodash", "@babel/core", "left-pad", "react"}
 
 
+def test_parse_package_json_npm_overrides_skips_non_registry_value(tmp_path: Path):
+    # Confirmed live (npm 12.2.0): an overrides value can itself be a
+    # file:/git-URL/tarball-URL specifier, not just a version/range/npm:
+    # alias -- npm's own docs list "an exact version, a semver range, a
+    # dist-tag, or a replacement specifier such as npm:, file:, or a Git
+    # URL". `npm install --dry-run -v` against {"wrappy": "file:./local-
+    # fork"} fetched only the other direct dependency from the registry,
+    # never "wrappy" -- it's resolved straight from the path instead.
+    # Before this fix, the override key was always checked against the
+    # registry regardless of the value, so a legitimate file:/git: fork
+    # override got reported as a hallucinated NOT FOUND package.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {"once": "1.4.0"},
+                "overrides": {
+                    "wrappy": "file:./local-fork",
+                    "semver": "git+https://github.com/npm/node-semver.git",
+                    "real-override": "^1.0.0",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"once", "real-override"}
+    assert "wrappy" not in names
+    assert "semver" not in names
+
+
 def test_parse_package_json_reads_npm_overrides(tmp_path: Path):
     pkg = tmp_path / "package.json"
     pkg.write_text(
@@ -807,6 +859,31 @@ def test_parse_package_json_resolves_npm_alias_in_yarn_resolution_value(tmp_path
     names = {dep.name for dep in parse_package_json(pkg)}
     assert names == {"is-odd", "totally-hallucinated-slopcheck-test-xyz-42", "graceful-fs"}
     assert "is-number" not in names
+
+
+def test_parse_package_json_yarn_resolutions_skips_non_registry_value(tmp_path: Path):
+    # Confirmed live (Yarn Classic 1.22.22): a resolutions value can also
+    # be a file:/git-URL/tarball-URL specifier, resolved straight from
+    # that location -- verbose yarn install log showed the registry was
+    # never queried for "wrappy" under {"wrappy": "file:./local-fork"}.
+    # Before this fix, the pattern's derived name was always checked
+    # regardless of the value, so a legitimate fork override got reported
+    # as a hallucinated package.
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "dependencies": {"once": "1.4.0"},
+                "resolutions": {
+                    "wrappy": "file:./local-fork",
+                    "graceful-fs": "^4.2.11",
+                },
+            }
+        )
+    )
+    names = {dep.name for dep in parse_package_json(pkg)}
+    assert names == {"once", "graceful-fs"}
+    assert "wrappy" not in names
 
 
 def test_parse_pyproject_pep621(tmp_path: Path):
