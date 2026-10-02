@@ -1243,6 +1243,60 @@ def test_parse_pyproject_hatch_env_extra_dependencies(tmp_path: Path):
     }
 
 
+def test_parse_pyproject_hatch_env_overrides_dependencies(tmp_path: Path):
+    # Hatch has a *third* way to inject dependencies into a named
+    # environment, on top of the plain `dependencies`/`extra-dependencies`
+    # fields the two tests above already cover: an `overrides` sub-table
+    # (https://hatch.pypa.io/latest/config/environment/advanced/#overrides)
+    # of the form `overrides.<source>.<condition>.<option>`, where `source`
+    # is one of platform/env/matrix/name and `option` can itself be
+    # `dependencies`/`extra-dependencies`. Each entry is either a plain
+    # string or a `{value = "...", if = [...]}` table gating it on a
+    # specific matrix value (or platform/env-var/env-name) match.
+    #
+    # Confirmed live with real Hatch 1.18.1 against a scratch project using
+    # exactly the shape below: `hatch env create test.a` genuinely tried
+    # (and failed) to resolve the fake name from PyPI ("Could not find a
+    # version that satisfies the requirement
+    # totally-hallucinated-hatch-override-xyz-999 (from versions: none)"),
+    # while `hatch env create test.b` (the matrix variant whose `if`
+    # condition doesn't match) installed only `requests` -- confirming the
+    # entry really is condition-gated at runtime, and that slopcheck
+    # deliberately does not try to evaluate that gating itself (it has no
+    # reliable notion of which platform/env/matrix variant a real `hatch`
+    # invocation will use, and the one that *did* match above was still a
+    # real, installable dependency). Before this fix, `_hatch_deps` never
+    # read `overrides` at all, so this name was silently never checked.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests"]
+
+        [tool.hatch.envs.test]
+        dependencies = ["requests"]
+
+        [[tool.hatch.envs.test.matrix]]
+        pyver = ["a", "b"]
+
+        [tool.hatch.envs.test.overrides]
+        matrix.pyver.dependencies = [
+            { value = "totally-hallucinated-hatch-override-xyz-999", if = ["a"] },
+        ]
+        platform.linux.extra-dependencies = ["totally-hallucinated-hatch-override-platform-xyz-1"]
+        name.test.dependencies = ["totally-hallucinated-hatch-override-name-xyz-2"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {
+        "requests",
+        "totally-hallucinated-hatch-override-xyz-999",
+        "totally-hallucinated-hatch-override-platform-xyz-1",
+        "totally-hallucinated-hatch-override-name-xyz-2",
+    }
+
+
 def test_parse_pyproject_build_system_requires(tmp_path: Path):
     # PEP 518 makes [build-system] requires mandatory for any project pip
     # can build from source — a plain list of PEP 508 requirement strings

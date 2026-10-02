@@ -384,6 +384,76 @@ def _hatch_deps(data: dict) -> list[str]:
         if isinstance(env, dict):
             names.extend(env.get("dependencies", []))
             names.extend(env.get("extra-dependencies", []))
+            names.extend(_hatch_override_deps(env))
+    return names
+
+
+def _hatch_override_deps(env: dict) -> list[str]:
+    """Flatten a Hatch environment's `overrides` table into the extra `dependencies`/`extra-dependencies` entries it can inject.
+
+    Hatch's own environment config (https://hatch.pypa.io/latest/config/environment/advanced/#overrides)
+    lets `[tool.hatch.envs.<name>]` carry a *third* way to add dependencies,
+    on top of the plain `dependencies`/`extra-dependencies` fields
+    `_hatch_deps` already reads directly off the env table: an `overrides`
+    sub-table of the form `overrides.<source>.<condition>.<option>`, where
+    `source` is one of `platform`/`env`/`matrix`/`name` and `option` can
+    itself be `dependencies` or `extra-dependencies` (confirmed by reading
+    installed Hatch 1.18.1's own `hatch/project/config.py`, which calls
+    `apply_overrides(env_name, "matrix", variable, ..., options, ...)` for
+    each matrix variable and the analogous calls for `platform`/`env`/`name`
+    — all four sources feed the identical option-handling code). Each
+    option's value is either a plain list of requirement strings or a list
+    of `{value = "...", if = [...]}` tables gating the entry on a specific
+    platform/env-var/matrix-value/env-name match (`hatch/project/env.py`'s
+    `_apply_override_to_array`).
+
+    Confirmed live and current, not hypothetical (Hatch 1.18.1, a scratch
+    project with `[tool.hatch.envs.test] dependencies = ["requests"]`,
+    `[[tool.hatch.envs.test.matrix]] pyver = ["a", "b"]`, and
+    `[tool.hatch.envs.test.overrides] matrix.pyver.dependencies = [{value =
+    "totally-hallucinated-hatch-override-xyz-999", if = ["a"]}]`):
+    `hatch env create test.a` genuinely tried (and failed) to resolve the
+    fake name from PyPI ("Could not find a version that satisfies the
+    requirement totally-hallucinated-hatch-override-xyz-999 (from versions:
+    none)"), while `hatch env create test.b` (the matrix variant where the
+    `if` condition doesn't match) installed only `requests`, confirming the
+    override is genuinely condition-gated at runtime. Before this fix,
+    `_hatch_deps` never looked at `overrides` at all, so a hallucinated name
+    planted there — invisible in the env's own plain `dependencies` list —
+    was silently never checked, the same "0 dependencies checked, all
+    clean" false-all-clear shape already fixed here for every other
+    unhandled Hatch/PEP 621/PEP 735 field.
+
+    Deliberately does NOT evaluate the `if`/`platform`/`env` gating
+    condition itself: slopcheck has no reliable notion of which platform,
+    env vars, or matrix variant a real `hatch env create` invocation (by
+    this project's own CI, or a contributor's machine) will actually use,
+    and the one condition that *did* match in the live check above was
+    still a real, installable (if fake) dependency for a real `hatch`
+    invocation — so every entry across every source/condition is collected
+    unconditionally, the same "safer to over-check than silently miss a
+    real hallucination" bias this module already applies elsewhere (e.g.
+    the multiple-constraints list form in `_is_poetry_registry_dep`).
+    """
+    names: list[str] = []
+    overrides = env.get("overrides", {})
+    if not isinstance(overrides, dict):
+        return names
+    for source_table in overrides.values():
+        if not isinstance(source_table, dict):
+            continue
+        for condition_table in source_table.values():
+            if not isinstance(condition_table, dict):
+                continue
+            for option in ("dependencies", "extra-dependencies"):
+                entries = condition_table.get(option)
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if isinstance(entry, str):
+                        names.append(entry)
+                    elif isinstance(entry, dict) and isinstance(entry.get("value"), str):
+                        names.append(entry["value"])
     return names
 
 
