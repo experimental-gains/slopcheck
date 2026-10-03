@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.89
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.90
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.89
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.90
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.89
+    rev: v0.1.90
     hooks:
       - id: slopcheck
 ```
@@ -1288,6 +1288,22 @@ wasn't read at all, so a real PDM workspace's own private, unpublished
 sibling package — referenced exactly the way PDM's own docs show — was
 reported as a plain `not_found` hallucination.
 
+A PDM workspace member scanned on its own now also recognizes its
+*sibling* members' names, not just the ones declared in a scanned root
+(fixed in v0.1.90). `[tool.pdm.workspace].members` only ever lives in
+the root's pyproject.toml, so scanning just a member directory — the
+same monorepo-CI shape as the npm/pnpm/uv workspace-root fixes
+elsewhere on this page — never discovered the root at all, and
+therefore never saw any sibling's declared name as locally resolved.
+Confirmed live (PDM 2.29.2): a member depending on another member by
+name resolved entirely from the local checkout ("The file
+packages/other is a local directory, use it directly") when `pdm lock`
+ran from the root — the only way PDM allows it to run at all. Before
+this fix, slopcheck scanning just the dependent member's own directory
+reported the sibling's name a plain `not_found` hallucination, even
+though scanning the whole tree (so the root's pyproject.toml was also
+among the scanned manifests) already correctly recognized it.
+
 Hatch's own `extra-dependencies` field on a named
 `[tool.hatch.envs.<name>]` table (https://hatch.pypa.io/latest/config/environment/overview/#dependencies)
 is now read too (fixed in v0.1.71): it lets an environment that inherits
@@ -1559,6 +1575,25 @@ dotfiles-managed machine baking in a company mirror once instead of
 repeating it per project) had every genuinely-resolvable private-only
 dependency reported as a plain `not_found` hallucination instead of
 downgraded to `private`.
+
+A PDM workspace member scanned on its own now inherits its workspace
+root's `[[tool.pdm.source]]`/`pdm.toml`/`config.toml`/`PDM_PYPI_URL`
+config too (fixed in v0.1.90) — the PDM analog of the uv fix right
+below. Confirmed live (PDM 2.29.2): `pdm lock`/`pdm install` both
+hard-error with "can only be run from the workspace root" when invoked
+from inside a member directory at all, so the *only* real resolution
+that ever happens is from the root — and running from there genuinely
+attempted a root-level `[[tool.pdm.source]]`'s unreachable address for
+a dependency declared only in a member's own `[project.dependencies]`,
+with no source table of its own (`pdm.termui: Adding requirement
+<name>(from member 0.1.0)`, then `ConnectError` to the configured
+address). Before this fix, `pdm_private_registry_context` only ever
+looked at the directory holding each *scanned* pyproject.toml, so
+scanning just a workspace member directory — the same realistic
+monorepo-CI shape as every other workspace-root fix on this page —
+never saw the root's private-index config at all, reporting the
+dependency a plain `not_found` hallucination instead of downgraded to
+`private`.
 
 A uv workspace member scanned on its own now inherits its workspace
 root's private-index config too (fixed in v0.1.85). uv workspaces
