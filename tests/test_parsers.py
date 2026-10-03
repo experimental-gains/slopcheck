@@ -2122,6 +2122,65 @@ def test_parse_pipfile_skips_svn_hg_bzr_vcs_sources(tmp_path: Path):
     assert names == {"requests"}
 
 
+def test_parse_pipfile_reads_custom_categories(tmp_path: Path):
+    # Real-world find: Pipenv's own `get_package_categories()` (pipenv/
+    # utils/pipfile.py, Pipenv 2026.8.0) treats every top-level Pipfile
+    # table as a package category except a fixed exclusion list
+    # ("build-system", "pipenv", "requires", "scripts", "source") -- an
+    # arbitrary section name like `[feature-x-packages]` is a real,
+    # documented Pipenv feature (`pipenv install --categories`), not a
+    # typo. Confirmed live (Pipenv 2026.8.0): a Pipfile with a hallucinated
+    # name sitting only in such a custom category made a real `pipenv lock`
+    # genuinely try and fail to resolve it from PyPI, the identical failure
+    # as a name in `[packages]`. Before this fix, `parse_pipfile` only ever
+    # read the two literal section names "packages"/"dev-packages", so this
+    # name was silently never checked at all.
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        """
+        [[source]]
+        name = "pypi"
+        url = "https://pypi.org/simple"
+        verify_ssl = true
+
+        [packages]
+        requests = "*"
+
+        [feature-x-packages]
+        totally-hallucinated-pipenv-category-xyz-123 = "*"
+
+        [requires]
+        python_version = "3.13"
+        """
+    )
+    names = {dep.name for dep in parse_pipfile(pipfile)}
+    assert names == {"requests", "totally-hallucinated-pipenv-category-xyz-123"}
+
+
+def test_parse_pipfile_skips_non_category_sections(tmp_path: Path):
+    # Mirror image of the test above: `[pipenv]`/`[scripts]` are real
+    # Pipfile tables (Pipenv config, shell-script aliases) that are never
+    # package categories, confirmed against Pipenv's own
+    # `NON_CATEGORY_SECTIONS` constant. Neither should ever contribute a
+    # "dependency" name, even though both are plain key=value TOML tables
+    # structurally indistinguishable from `[packages]`.
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        """
+        [packages]
+        requests = "*"
+
+        [pipenv]
+        allow_prereleases = true
+
+        [scripts]
+        test = "pytest"
+        """
+    )
+    names = {dep.name for dep in parse_pipfile(pipfile)}
+    assert names == {"requests"}
+
+
 def test_find_manifests_discovers_pipfile(tmp_path: Path):
     (tmp_path / "Pipfile").write_text('[packages]\nrequests = "*"\n')
     found = {p.name for p in find_manifests(tmp_path)}

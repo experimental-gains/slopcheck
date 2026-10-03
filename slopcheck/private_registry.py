@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 from .parsers import (
     _normalize_name,
+    _pipfile_category_sections,
     npm_workspace_root,
     pdm_workspace_root,
     uv_workspace_root,
@@ -871,6 +872,14 @@ def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, s
     repeated per-project) had every genuinely-resolvable dependency
     reported as a plain `not_found` hallucination instead of downgraded to
     `private`.
+
+    The per-package `index=` scope is read from every category section
+    `parsers._pipfile_category_sections` recognizes, not just the
+    conventional `packages`/`dev-packages` pair -- see that function's own
+    docstring for the live-verified gap this closes (Pipenv's own
+    `pipenv install --categories`/custom-category feature, confirmed to
+    apply to an arbitrary section name with no special meaning to Pipenv
+    beyond "not on its exclusion list").
     """
     blanket = False
     explicit_names: set[str] = set()
@@ -907,7 +916,7 @@ def pipfile_private_registry_context(pipfile_paths: list[Path]) -> tuple[bool, s
         elif mirror_replaces_public and _is_public_pypi_url(default_url):
             blanket = True
 
-        for section in ("packages", "dev-packages"):
+        for section in _pipfile_category_sections(data):
             for dep_name, spec in data.get(section, {}).items():
                 if not isinstance(spec, dict):
                     continue

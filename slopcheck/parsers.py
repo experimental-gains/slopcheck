@@ -666,6 +666,46 @@ def _pipfile_deps(data: dict, section: str) -> list[str]:
     return names
 
 
+# Pipenv's own "category" feature (`pipenv install --categories foo`,
+# https://pipenv.pypa.io/en/latest/indexes/#specifying-package-categories)
+# lets a Pipfile declare dependency groups under ANY top-level table name,
+# not just the conventional `[packages]`/`[dev-packages]` pair. Reading
+# Pipenv 2026.8.0's own source directly (`pipenv/utils/pipfile.py`'s
+# `Pipfile.get_package_categories`) shows it treats every top-level Pipfile
+# section as a package category *except* a fixed, explicit exclusion list —
+# its own `NON_CATEGORY_SECTIONS` constant, mirrored here verbatim — not an
+# allowlist of conventional names. Confirmed live (real Pipenv 2026.8.0): a
+# Pipfile with an arbitrary `[feature-x-packages]` table (no special meaning
+# to Pipenv beyond "not one of the excluded names") containing a
+# hallucinated package name made a real `pipenv lock` genuinely try and fail
+# to resolve it from PyPI ("Could not find a version that satisfies the
+# requirement ... (from versions: none)") -- the identical failure shape as
+# a name sitting in `[packages]`, with no `--categories` flag needed; lock
+# generation processes every category by default. Before this fix,
+# `parse_pipfile` only ever read the two literal section names "packages"/
+# "dev-packages", so any custom category's dependencies -- a real,
+# documented, current Pipenv feature for splitting optional/feature-scoped
+# dependency groups -- were silently never checked at all, the same silent
+# false-all-clear shape this module's other manifest-coverage fixes already
+# closed for entirely different file formats.
+_PIPFILE_NON_CATEGORY_SECTIONS = frozenset({"build-system", "pipenv", "requires", "scripts", "source"})
+
+
+def _pipfile_category_sections(data: dict) -> list[str]:
+    """Every top-level Pipfile table Pipenv itself treats as a package category.
+
+    Shared with `private_registry.pipfile_private_registry_context`, which
+    needs the identical category list to scope a per-dependency `index=` key
+    (Pipenv's private-source pinning) correctly across every category, not
+    just `packages`/`dev-packages`.
+    """
+    return [
+        section
+        for section, value in data.items()
+        if section not in _PIPFILE_NON_CATEGORY_SECTIONS and isinstance(value, dict)
+    ]
+
+
 def parse_pipfile(path: Path) -> list[Dependency]:
     """Parse Pipenv's `Pipfile` (not `Pipfile.lock`).
 
@@ -690,13 +730,16 @@ def parse_pipfile(path: Path) -> list[Dependency]:
     right there unread.
 
     `Pipfile` is TOML (unlike its companion `Pipfile.lock`, which is JSON),
-    so it's parsed the same way as `pyproject.toml`. Only `[packages]` and
-    `[dev-packages]` are read; `[requires]` (Python version) and `[[source]]`
-    (Pipenv's own private-index config, analogous to Poetry's
-    `[[tool.poetry.source]]`) aren't dependency names.
+    so it's parsed the same way as `pyproject.toml`. Every category section
+    `_pipfile_category_sections` recognizes is read (see its own docstring
+    for why that's not just `[packages]`/`[dev-packages]`); `[requires]`
+    (Python version) and `[[source]]` (Pipenv's own private-index config,
+    analogous to Poetry's `[[tool.poetry.source]]`) aren't dependency names.
     """
     data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    names = _pipfile_deps(data, "packages") + _pipfile_deps(data, "dev-packages")
+    names = []
+    for section in _pipfile_category_sections(data):
+        names.extend(_pipfile_deps(data, section))
     return [Dependency(name, "pypi", str(path)) for name in names]
 
 

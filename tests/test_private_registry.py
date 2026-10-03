@@ -1692,6 +1692,33 @@ def test_pipfile_dev_packages_also_scoped(tmp_path: Path):
     assert explicit_names == {"internal-dev-tool"}
 
 
+def test_pipfile_custom_category_also_scoped(tmp_path: Path):
+    # Real-world find (see `parsers._pipfile_category_sections`): Pipenv's
+    # own custom-category feature means a dependency's `index=` scope needs
+    # reading from every category Pipenv itself would process, not just
+    # `packages`/`dev-packages`. Confirmed live (Pipenv 2026.8.0) that a
+    # dependency living only in an arbitrary `[feature-x-packages]` table
+    # with its own `index=` key is genuinely resolved against that scoped
+    # source, not the default, by a real `pipenv lock`.
+    pipfile = tmp_path / "Pipfile"
+    pipfile.write_text(
+        "[[source]]\n"
+        'name = "pypi"\n'
+        'url = "https://pypi.org/simple"\n'
+        "\n"
+        "[[source]]\n"
+        'name = "internal"\n'
+        'url = "https://127.0.0.1:9/simple"\n'
+        "\n"
+        "[feature-x-packages]\n"
+        'internal-feature-tool = { version = "*", index = "internal" }\n'
+    )
+
+    _blanket, explicit_names = pipfile_private_registry_context([pipfile])
+
+    assert explicit_names == {"internal-feature-tool"}
+
+
 def test_pipfile_index_key_naming_the_public_source_is_not_scoped_private(tmp_path: Path):
     pipfile = tmp_path / "Pipfile"
     pipfile.write_text(
