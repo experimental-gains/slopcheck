@@ -1858,6 +1858,45 @@ def test_parse_manifest_routes_non_canonical_in_filename_to_requirements_parser(
     assert names == {"pytest"}
 
 
+def test_find_manifests_discovers_non_canonical_requirements_filenames(tmp_path: Path):
+    # `parse_manifest` was fixed (see the two tests above) to route any
+    # ".txt"/".in" file to the requirements parser when given a direct path
+    # -- but `find_manifests`, the directory-walk function the tool's own
+    # default/documented invocation (`slopcheck` with no args, scanning the
+    # current directory) relies on, only ever looks for the exact literal
+    # filenames "requirements.txt"/"requirements.in" (PARSERS' own keys). It
+    # never applies that same ".txt"/".in" fallback during the walk, so a
+    # real project's split requirements files are never even found, let
+    # alone parsed, unless a user names them individually on the command
+    # line. Two real, currently-live examples confirm this isn't
+    # contrived: home-assistant/core's root carries "requirements.txt"
+    # (production deps) alongside a sibling "requirements_test.txt" (real
+    # pinned test/lint deps -- mypy, astroid, coverage, etc. -- confirmed
+    # against the actual file on github.com/home-assistant/core), with
+    # neither file "-r"-including the other; cookiecutter-django's
+    # generated project has no top-level requirements.txt at all, only
+    # "requirements/base.txt", "requirements/local.txt", and
+    # "requirements/production.txt" (confirmed against the actual template
+    # on github.com/cookiecutter/cookiecutter-django). `pip install -r
+    # requirements_test.txt`/`pip install -r requirements/base.txt` are
+    # both perfectly ordinary, real pip invocations -- pip never cares
+    # what a requirements file is named, only this tool's own directory-
+    # walk discovery does.
+    (tmp_path / "requirements.txt").write_text("requests\n")
+    (tmp_path / "requirements_test.txt").write_text("totally-hallucinated-ha-test-dep-xyz-123\n")
+    nested = tmp_path / "requirements"
+    nested.mkdir()
+    (nested / "base.txt").write_text("totally-hallucinated-ccd-base-dep-xyz-456\n")
+
+    found = {str(p.relative_to(tmp_path)) for p in find_manifests(tmp_path)}
+
+    assert found == {
+        "requirements.txt",
+        "requirements_test.txt",
+        str(Path("requirements", "base.txt")),
+    }
+
+
 def test_parse_manifest_unknown_extension_raises_clean_manifest_error(tmp_path: Path):
     weird = tmp_path / "notes.md"
     weird.write_text("not a manifest\n")

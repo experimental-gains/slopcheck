@@ -117,6 +117,29 @@ def test_main_scans_setup_cfg_alongside_build_system_only_pyproject(tmp_path: Pa
     assert "totally-made-up-pkg-9000" in out
 
 
+def test_main_scans_requirements_file_with_non_canonical_name(tmp_path: Path, capsys):
+    # Regression test for a real-world find: `find_manifests` only ever
+    # auto-discovered the exact literal filenames "requirements.txt"/
+    # "requirements.in", not any other ".txt"/".in" file -- even though
+    # `parse_manifest` already parses one correctly when named on the
+    # command line, and real pip doesn't care about the filename at all.
+    # home-assistant/core's real "requirements_test.txt" (never `-r`-
+    # included by its sibling "requirements.txt") is exactly this shape:
+    # before this fix, a directory scan found the production
+    # requirements.txt but never even looked at requirements_test.txt, so
+    # a hallucinated test-only dependency added there went unreported with
+    # exit code 0.
+    (tmp_path / "requirements.txt").write_text("requests\n")
+    (tmp_path / "requirements_test.txt").write_text("totally-made-up-pkg-9000\n")
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker({"requests"})}):
+        exit_code = cli.main([str(tmp_path)])
+
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "totally-made-up-pkg-9000" in out
+
+
 def test_main_errors_on_missing_path(tmp_path: Path):
     missing = tmp_path / "nope"
     assert cli.main([str(missing)]) == 2

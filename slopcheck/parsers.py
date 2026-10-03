@@ -815,6 +815,21 @@ def parse_pylock_toml(path: Path) -> list[Dependency]:
 # variable "<name>" segment can't be a literal dict key.
 _PYLOCK_FILENAME_RE = re.compile(r"^pylock\.([^.]+\.)?toml$")
 
+# A real pip/pip-tools requirements file routinely isn't named exactly
+# "requirements.txt"/"requirements.in" -- see `find_manifests`' own docstring
+# for the two live, currently-real examples (home-assistant/core's
+# "requirements_test.txt", cookiecutter-django's "requirements/base.txt")
+# this closes. Deliberately narrower than "every *.txt/*.in file": a bare
+# suffix match would also walk into any unrelated prose ".txt" file a repo
+# happens to contain (a CHANGELOG, a wordlist fixture, ...) and feed it
+# through the line-based requirement regex, which is permissive enough to
+# treat a lone single-token line as a "dependency" name -- a real, if
+# contrived, false-positive-flood risk a plain suffix check doesn't have.
+# Requiring "requirement" (case-insensitive) in either the filename itself
+# or its immediate parent directory name covers both real examples above
+# without widening the net to arbitrary text files.
+_REQUIREMENTS_FILENAME_HINT_RE = re.compile(r"requirement", re.IGNORECASE)
+
 
 def _setup_cfg_drop_comment(line: str) -> str:
     """Drop a setup.cfg list value's trailing comment the way setuptools itself does.
@@ -2524,19 +2539,49 @@ def find_manifests(root: Path) -> list[Path]:
     of a supply-chain check on a monorepo. `node_modules` and dot-directories
     are pruned during the walk (not just filtered from the result) so the
     walk itself never descends into them.
+
+    `parse_manifest` already routes any ".txt"/".in"-suffixed file to the
+    requirements parser when it's given directly, since real pip/pip-tools
+    doesn't care what a requirements file is named -- only a project's own
+    convention does. This walk used to only ever look for the two literal
+    names "requirements.txt"/"requirements.in" (`PARSERS`' own keys), so a
+    real project splitting its requirements across other filenames was
+    invisible to the directory-walk scan this tool's own default invocation
+    (`slopcheck`, scanning the current directory) relies on, even though the
+    identical file would be parsed correctly if named on the command line.
+    Confirmed live against two real, currently-live examples:
+    home-assistant/core's root carries "requirements.txt" (production deps)
+    alongside a sibling "requirements_test.txt" (real pinned test/lint deps
+    -- mypy, astroid, coverage, etc. -- neither file "-r"-including the
+    other, so the second file was never reached by recursion either);
+    cookiecutter-django's generated project has no top-level
+    requirements.txt at all, only "requirements/base.txt",
+    "requirements/local.txt", and "requirements/production.txt". Both are
+    ordinary `pip install -r <file>` targets in real pip. See
+    `_REQUIREMENTS_FILENAME_HINT_RE`'s own comment for why this is scoped to
+    filenames/directory names mentioning "requirement" rather than every
+    ".txt"/".in" file in the tree.
     """
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")]
+        dir_hint = bool(_REQUIREMENTS_FILENAME_HINT_RE.search(Path(dirpath).name))
         for filename in PARSERS:
             if filename in filenames:
                 found.append(Path(dirpath) / filename)
-        # `pylock.toml`/`pylock.<name>.toml` (see `_PYLOCK_FILENAME_RE`) can't
-        # be a literal `PARSERS` key, so it needs its own scan of this
-        # directory's actual filenames rather than the dict-key membership
-        # check above.
         for filename in filenames:
+            if filename in PARSERS:
+                continue
+            # `pylock.toml`/`pylock.<name>.toml` (see `_PYLOCK_FILENAME_RE`)
+            # can't be a literal `PARSERS` key, so it needs its own scan of
+            # this directory's actual filenames rather than the dict-key
+            # membership check above.
             if _PYLOCK_FILENAME_RE.match(filename):
+                found.append(Path(dirpath) / filename)
+                continue
+            if Path(filename).suffix not in (".txt", ".in"):
+                continue
+            if dir_hint or _REQUIREMENTS_FILENAME_HINT_RE.search(filename):
                 found.append(Path(dirpath) / filename)
     return found
 
