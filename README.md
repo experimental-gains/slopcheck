@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.91
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.92
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.91
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.92
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.91
+    rev: v0.1.92
     hooks:
       - id: slopcheck
 ```
@@ -1207,6 +1207,29 @@ real pnpm never fetches a removed dependency. Before this fix,
 file was only recognized for its `packages:` workspace-membership
 role), so a hallucinated name routed through its `overrides` field was
 invisible no matter what.
+
+A pnpm workspace member scanned on its own now also discovers its
+workspace root's `pnpm-workspace.yaml`, the same way the PDM workspace
+fix above does for `[tool.pdm.workspace]` (fixed in v0.1.92). pnpm
+declares workspace membership in a file that only ever lives at the
+monorepo root, never inside a member's own directory — so scanning just
+one member (a realistic shape: a monorepo CI job or pre-commit hook
+scoped to one changed package) never saw `pnpm-workspace.yaml` at all,
+the exact same gap already fixed for npm/Yarn Classic, uv, and PDM's own
+workspace-root discovery, just never ported to pnpm's. Confirmed live
+(pnpm 12.8.1, a from-scratch two-package workspace: root
+`pnpm-workspace.yaml` with `packages: ['packages/*']` and
+`linkWorkspacePackages: true` — note this setting is read from
+`pnpm-workspace.yaml` itself in current pnpm, not a root `.npmrc` the
+way an older pnpm accepted, confirmed by comparing both locations
+live): running `pnpm install` from inside the member directory itself
+genuinely resolved a sibling member's plain-semver-range dependency
+entirely locally — a real symlink into `node_modules`, zero
+`registry.npmjs.org` requests for that name in a `--loglevel debug`
+trace. Before this fix, scanning just the member directory reported the
+sibling's name a plain `not_found` hallucination; scanning the whole
+tree (so the root's `pnpm-workspace.yaml` was itself among the scanned
+files) already worked correctly.
 
 A conda `environment.yml`/`environment.yaml` is now recognized as a
 manifest too (fixed in v0.1.66 — earlier versions had no filename entry
