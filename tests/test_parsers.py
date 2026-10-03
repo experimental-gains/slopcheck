@@ -15,6 +15,7 @@ from slopcheck.parsers import (
     parse_requirements_txt,
     parse_setup_cfg,
     pdm_workspace_member_names,
+    pdm_workspace_root,
     pnpm_workspace_member_names,
     requirements_txt_files_touched,
     uv_workspace_root,
@@ -464,6 +465,94 @@ def test_pdm_workspace_member_names_ignores_missing_or_empty_members(tmp_path: P
     no_members.write_text('[project]\nname = "foo"\n\n[tool.pdm]\n')
 
     assert pdm_workspace_member_names([no_members]) == []
+
+
+def test_pdm_workspace_root_finds_ancestor_with_matching_members_pattern(tmp_path: Path):
+    # Regression test for a real-world find: PDM's own `pdm lock`/`pdm
+    # install` both hard-error ("can only be run from the workspace root")
+    # when invoked from inside a member directory, so the *only* way a real
+    # resolution ever happens is from the root -- confirmed live (PDM
+    # 2.29.2) that running from the root genuinely consults the root's own
+    # `[tool.pdm.workspace].members` list for a member's sibling-dependency
+    # resolution and the root's own `[[tool.pdm.source]]`/config files for a
+    # member's own plain dependencies. Scanning just the member directory
+    # (a realistic monorepo-CI shape, the exact pattern already fixed for
+    # uv via `uv_workspace_root`) never saw the root's pyproject.toml at
+    # all before this fix -- see `pdm_workspace_root`'s own docstring for
+    # the full live repro.
+    root = tmp_path / "root"
+    member = root / "packages" / "foo"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\n\n[tool.pdm.workspace]\nmembers = ["packages/*"]\n'
+    )
+    (member / "pyproject.toml").write_text('[project]\nname = "foo"\n')
+
+    assert pdm_workspace_root(member) == root
+
+
+def test_pdm_workspace_root_none_without_workspace_table(tmp_path: Path):
+    # The mirror image: a plain nested pyproject.toml with no enclosing
+    # `[tool.pdm.workspace]` does not get this treatment.
+    root = tmp_path / "root"
+    member = root / "sub"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text('[project]\nname = "root"\n')
+    (member / "pyproject.toml").write_text('[project]\nname = "sub"\n')
+
+    assert pdm_workspace_root(member) is None
+
+
+def test_pdm_workspace_root_none_when_members_pattern_does_not_match(tmp_path: Path):
+    # An ancestor pyproject.toml declaring `[tool.pdm.workspace]` whose
+    # `members` glob doesn't actually resolve to `start` must not match --
+    # mirrors `uv_workspace_root`'s identical "ancestor present but pattern
+    # doesn't cover this directory" guard.
+    root = tmp_path / "root"
+    member = root / "notmembers" / "foo"
+    member.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\n\n[tool.pdm.workspace]\nmembers = ["packages/*"]\n'
+    )
+    (member / "pyproject.toml").write_text('[project]\nname = "foo"\n')
+
+    assert pdm_workspace_root(member) is None
+
+
+def test_pdm_workspace_root_none_with_no_ancestor_pyproject(tmp_path: Path):
+    nested = tmp_path / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+
+    assert pdm_workspace_root(nested) is None
+
+
+def test_pdm_workspace_member_names_discovers_root_from_member_alone(tmp_path: Path):
+    # Regression test for the real-world find above, through
+    # `pdm_workspace_member_names` itself: scanning *only* the member's own
+    # pyproject.toml (the root's is never passed in at all) must still
+    # recognize a sibling member's declared name as locally-resolved --
+    # confirmed live (PDM 2.29.2) that `pdm lock`, run from the root (the
+    # only way PDM allows it), resolves a member's dependency on a sibling
+    # member entirely from the local checkout, zero PyPI involvement.
+    # Before this fix, slopcheck scanning just `packages/member` reported
+    # the sibling's name a plain `not_found` hallucination.
+    root = tmp_path / "pdm-monorepo"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\n\n[tool.pdm.workspace]\nmembers = ["packages/*"]\n'
+    )
+    member = root / "packages" / "member"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\ndependencies = ["internal-bar"]\n'
+    )
+    sibling = root / "packages" / "bar"
+    sibling.mkdir(parents=True)
+    (sibling / "pyproject.toml").write_text('[project]\nname = "internal-bar"\n')
+
+    pairs = pdm_workspace_member_names([member / "pyproject.toml"])
+
+    assert dict(pairs) == {root: {"member", "internal-bar"}}
 
 
 def test_parse_package_json_skips_bare_github_shorthand_and_other_git_hosts(tmp_path: Path):

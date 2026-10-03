@@ -2847,3 +2847,80 @@ def test_pdm_config_file_malformed_is_not_an_error(tmp_path: Path, monkeypatch):
     (tmp_path / "pdm.toml").write_text("not valid toml [[[")
 
     assert pdm_private_registry_context([pyproject]) is False
+
+
+def test_pdm_workspace_member_inherits_root_source_table(tmp_path: Path, monkeypatch):
+    """Regression test for a real-world find: PDM's own `pdm lock`/`pdm
+    install` both hard-error ("can only be run from the workspace root")
+    when invoked from inside a member directory -- confirmed live (PDM
+    2.29.2) that a real `pdm lock`, run from the root (the only way PDM
+    allows it to run at all), genuinely attempts a root-level
+    `[[tool.pdm.source]]`'s unreachable address for a dependency declared
+    only in a *member's* own pyproject.toml, with zero `[tool.pdm.source]`
+    of its own. Before this fix, scanning the member directory alone (a
+    realistic monorepo-CI shape, the exact pattern already fixed for uv via
+    `uv_workspace_root`/`uv_private_registry_context`) never saw the root's
+    source table at all, so this reported `False` (not private) instead of
+    `True`."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\n\n[tool.pdm.workspace]\nmembers = ["packages/*"]\n'
+        "\n[[tool.pdm.source]]\n"
+        'name = "private"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+    member = root / "packages" / "member"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\ndependencies = ["acmecorp-internal-widget"]\n'
+    )
+
+    assert pdm_private_registry_context([member / "pyproject.toml"]) is True
+
+
+def test_pdm_workspace_member_inherits_root_config_file(tmp_path: Path, monkeypatch):
+    """The `pdm.toml`/`config.toml`/env-var analog of the test above: a
+    root-only `pdm.toml` (no `[[tool.pdm.source]]` anywhere) must also be
+    discovered from a member directory scanned alone."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "ws-root"\n\n[tool.pdm.workspace]\nmembers = ["packages/*"]\n'
+    )
+    (root / "pdm.toml").write_text('[pypi]\nurl = "https://pypi.internal.example/simple"\n')
+    member = root / "packages" / "member"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text(
+        '[project]\nname = "member"\ndependencies = ["acmecorp-internal-widget"]\n'
+    )
+
+    assert pdm_private_registry_context([member / "pyproject.toml"]) is True
+
+
+def test_pdm_non_workspace_member_does_not_inherit_unrelated_ancestor_source(
+    tmp_path: Path, monkeypatch
+):
+    """The mirror image: a plain nested pyproject.toml with no enclosing
+    `[tool.pdm.workspace]` must not pick up an unrelated ancestor's
+    `[[tool.pdm.source]]` -- matches `uv_workspace_root`'s own "ancestor
+    present but not a workspace" guard."""
+    _clear_pdm_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "root"\n'
+        "\n[[tool.pdm.source]]\n"
+        'name = "private"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+    nested = root / "sub"
+    nested.mkdir()
+    (nested / "pyproject.toml").write_text('[project]\nname = "sub"\ndependencies = ["requests"]\n')
+
+    assert pdm_private_registry_context([nested / "pyproject.toml"]) is False

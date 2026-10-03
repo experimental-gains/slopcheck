@@ -29,7 +29,12 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
-from .parsers import _normalize_name, npm_workspace_root, uv_workspace_root
+from .parsers import (
+    _normalize_name,
+    npm_workspace_root,
+    pdm_workspace_root,
+    uv_workspace_root,
+)
 
 # `-f`/`--find-links` (a flat file/HTML-page/local-directory source of
 # archives, searched *in addition to* the configured index rather than
@@ -1265,15 +1270,36 @@ def pdm_private_registry_context(pyproject_paths: list[Path]) -> bool:
     closes. Confirmed live the env var works the same way: `PDM_PYPI_URL=
     http://127.0.0.1:9/simple pdm lock`, zero config files anywhere,
     genuinely attempted that address instead of `pypi.org`.
+
+    A scanned pyproject.toml that's actually a PDM workspace *member* (not
+    the workspace root itself) also pulls in its enclosing workspace root's
+    `[[tool.pdm.source]]`/`pdm.toml`/`.pdm.toml` — confirmed live, see
+    `pdm_workspace_root`'s own docstring for the gap this closes (the PDM
+    analog of `uv_workspace_root`'s identical fix for uv, run #133/#646):
+    a root-level `[[tool.pdm.source]]` pointed at an unreachable address
+    made a real `pdm lock` — run from the root, the only way PDM allows it
+    to run at all — genuinely attempt that address for a dependency
+    declared only in the *member's* own `[project.dependencies]`, with zero
+    `[tool.pdm.source]` of its own. Before this fix, scanning that member
+    directory alone never saw the root's source table at all, so the
+    dependency was reported a plain `not_found` hallucination instead of
+    downgraded to `private`.
     """
     if os.environ.get("PDM_PYPI_URL") and not _is_public_pypi_url(os.environ["PDM_PYPI_URL"]):
         return True
 
-    for path in _pdm_config_paths([p.parent for p in pyproject_paths]):
+    project_roots = [p.parent for p in pyproject_paths]
+    workspace_roots = {root for root in (pdm_workspace_root(r) for r in project_roots) if root is not None}
+    all_roots = list(dict.fromkeys([*project_roots, *workspace_roots]))
+    all_pyproject_paths = list(
+        dict.fromkeys([*pyproject_paths, *(root / "pyproject.toml" for root in workspace_roots)])
+    )
+
+    for path in _pdm_config_paths(all_roots):
         if path.is_file() and _pdm_config_file_has_custom_source(path):
             return True
 
-    for path in pyproject_paths:
+    for path in all_pyproject_paths:
         if not path.is_file():
             continue
         try:

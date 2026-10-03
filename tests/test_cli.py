@@ -684,6 +684,57 @@ def test_pdm_workspace_member_scoping_does_not_hide_an_unrelated_project_with_th
     assert result.status == "not_found"
 
 
+def test_pdm_workspace_member_alone_still_sees_sibling_and_root_source(tmp_path: Path):
+    # End-to-end regression test for a real-world find: scanning *only* a
+    # PDM workspace member directory (a realistic shape -- a monorepo CI
+    # job or pre-commit hook scoped to one changed package, the exact
+    # pattern already fixed for uv via `uv_workspace_root`) never saw the
+    # workspace root's `[tool.pdm.workspace].members` list (so a dependency
+    # on a sibling member was reported `not_found`) or the root's own
+    # `[[tool.pdm.source]]` (so a dependency genuinely resolvable there was
+    # also reported `not_found` instead of downgraded to `private`) before
+    # this fix -- confirmed live, real `pdm lock` run from the root (PDM
+    # hard-errors if run from inside a member at all: "can only be run from
+    # the workspace root") genuinely resolves both cases. Scanning the whole
+    # tree already passed before this fix (`test_pdm_workspace_member_
+    # skipped_not_flagged_not_found`/`test_pdm_source_downgrades_not_found_
+    # to_private` above); this test is scoped to just the member subtree,
+    # where the root's pyproject.toml was never among the scanned manifests
+    # at all.
+    root = tmp_path / "monorepo"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "ws-root"\n'
+        "dependencies = []\n"
+        "\n"
+        "[tool.pdm.workspace]\n"
+        'members = ["packages/*"]\n'
+        "\n[[tool.pdm.source]]\n"
+        'name = "private"\n'
+        'url = "https://pypi.internal.example/simple"\n'
+    )
+    member = root / "packages" / "member"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "member"\n'
+        "dependencies = [\n"
+        '    "totally-hallucinated-pdm-sibling-xyz-999",\n'
+        '    "acmecorp-internal-widget",\n'
+        "]\n"
+    )
+    sibling = root / "packages" / "bar"
+    sibling.mkdir(parents=True)
+    (sibling / "pyproject.toml").write_text('[project]\nname = "totally-hallucinated-pdm-sibling-xyz-999"\n')
+
+    with patch.dict(cli.CHECKERS, {"pypi": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(member))
+
+    by_name = {dep.name: result.status for dep, result in results}
+    assert by_name == {"acmecorp-internal-widget": "private"}
+
+
 def test_npm_workspace_member_scoping_does_not_hide_an_unrelated_project_with_the_same_name(tmp_path: Path):
     # A workspace member name is only ever resolved locally *within* that
     # workspace's own directory subtree -- an unrelated project elsewhere in

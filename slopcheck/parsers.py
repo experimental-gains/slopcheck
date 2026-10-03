@@ -2087,6 +2087,67 @@ def _pdm_workspace_patterns(data: dict) -> list[str]:
     return [m for m in workspace.get("members", []) if isinstance(m, str)]
 
 
+def pdm_workspace_root(start: Path) -> Path | None:
+    """Find the nearest ancestor pyproject.toml whose `[tool.pdm.workspace]` claims `start` as a member.
+
+    The PDM analog of `uv_workspace_root`/`npm_workspace_root`: PDM's own
+    `WorkspaceManager.project` (`pdm/project/workspace.py`) walks `start`'s
+    ancestors looking for the nearest one whose pyproject.toml both declares
+    `[tool.pdm.workspace]` (any `members` list at all -- `is_root` only checks
+    truthiness) *and* whose resolved `members` glob actually includes `start`
+    -- confirmed by reading that function directly, which is exactly what a
+    real `pdm lock`/`pdm install` consults to decide "is the directory I'm
+    scanning part of a workspace, and if so, which root owns it."
+
+    Before this fix, both `pdm_private_registry_context` and
+    `pdm_workspace_member_names` only ever looked at the directory holding
+    each *scanned* pyproject.toml. Scanning a workspace member directory on
+    its own -- a realistic shape, e.g. a monorepo CI job or pre-commit hook
+    scoped to one changed package, the exact pattern already fixed for
+    uv via `uv_workspace_root` -- never saw the workspace root's
+    `[[tool.pdm.source]]`/`pdm.toml`/`config.toml` private-index config, nor
+    the root's own `[tool.pdm.workspace].members` list naming the member's
+    *siblings* (so a dependency on a sibling workspace member, resolved
+    entirely locally by a real `pdm lock` run from the root -- the only way
+    PDM allows it to run at all, confirmed live: `pdm lock`/`pdm install`
+    both hard-error with "can only be run from the workspace root" when
+    invoked from inside a member directory -- was reported a plain
+    `not_found` hallucination instead of recognized as a local package).
+
+    Live-verified (PDM 2.29.2): a two-member workspace (root
+    `[tool.pdm.workspace] members = ["packages/*"]`, member `packages/member`
+    depending on sibling-member name `packages/other` declares, zero
+    `[[tool.pdm.source]]` anywhere) resolved the dependency entirely locally
+    (`unearth.preparer: The file packages/other is a local directory, use it
+    directly`) when `pdm lock` ran from the root -- the only invocation PDM
+    permits. `slopcheck`, scanning `packages/member` alone, reported the
+    sibling name `not_found`; scanning the whole tree (so both pyproject.toml
+    files were in `paths`) correctly reported nothing. Separately, the same
+    workspace with a root-level `[[tool.pdm.source]]` pointed at an
+    unreachable address made `pdm lock` (again, from the root) genuinely
+    attempt that address for the *member's* own dependency
+    (`pdm.termui: Adding requirement <name>(from member 0.1.0)`, then a
+    `ConnectError` to the configured private source) -- `slopcheck` scanning
+    the member alone reported `not_found` where scanning the whole tree
+    correctly reported `private`.
+    """
+    start_resolved = start.resolve()
+    for ancestor in start_resolved.parents:
+        pyproject = ancestor / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            continue
+        members = _pdm_workspace_patterns(data)
+        if not members:
+            continue
+        if _workspace_patterns_include_dir(ancestor, members, start_resolved):
+            return ancestor
+    return None
+
+
 def pdm_workspace_member_names(pyproject_paths: list[Path]) -> list[tuple[Path, set[str]]]:
     """For every pyproject.toml declaring `[tool.pdm.workspace]`, the local package names it resolves without the registry.
 
@@ -2116,9 +2177,24 @@ def pdm_workspace_member_names(pyproject_paths: list[Path]) -> list[tuple[Path, 
     comparison in this module already uses, since a workspace member's
     `[project.name]` and the string naming it in `dependencies` can differ in
     case/separators.
+
+    A scanned pyproject.toml that's actually a workspace *member* (not the
+    workspace root itself) pulls in its enclosing root via
+    `pdm_workspace_root` first — see that function's own docstring for the
+    gap this closes (the PDM analog of `uv_workspace_root`'s identical fix
+    for uv). Without this, scanning just a member directory never saw the
+    root's `[tool.pdm.workspace]` at all, so it could never recognize any
+    of the member's siblings — including itself, if a cousin member
+    happened to depend on it — as locally-resolved.
     """
+    project_roots = [p.parent for p in pyproject_paths]
+    workspace_roots = {root for root in (pdm_workspace_root(r) for r in project_roots) if root is not None}
+    all_pyproject_paths = list(
+        dict.fromkeys([*pyproject_paths, *(root / "pyproject.toml" for root in workspace_roots)])
+    )
+
     pairs: list[tuple[Path, set[str]]] = []
-    for path in pyproject_paths:
+    for path in all_pyproject_paths:
         if not path.is_file():
             continue
         try:
