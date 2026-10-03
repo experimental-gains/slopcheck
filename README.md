@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.87
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.88
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.87
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.88
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.87
+    rev: v0.1.88
     hooks:
       - id: slopcheck
 ```
@@ -567,6 +567,24 @@ file directly on the command line (`slopcheck requirements_test.txt`,
 rather than the auto-discovered exact name `requirements.txt`) used to
 crash with an unhandled `KeyError` instead of scanning it; it's now
 handled the same as `requirements.txt`.
+
+A differently-named `.txt`/`.in` requirements file is now also found by
+a plain directory scan (`slopcheck`, no arguments), not just when named
+directly on the command line (fixed in v0.1.88). The auto-discovery
+walk only ever looked for the two literal filenames
+`requirements.txt`/`requirements.in`, even though the paragraph above
+already made passing one of these files *directly* work correctly —
+so `home-assistant/core`'s real `requirements_test.txt` (test/lint
+deps, not `-r`-included by its own `requirements.txt`) or
+`cookiecutter-django`'s `requirements/base.txt` (its generated project
+currently ships no top-level `requirements.txt` at all) were invisible
+to `slopcheck .`/`slopcheck` with no arguments: either silently never
+scanned (alongside another, unrelated manifest) or a hard "no manifest
+found" error, depending on what else was in the directory. Scoped to
+filenames/parent-directory names containing "requirement"
+(case-insensitive) rather than every `.txt`/`.in` file in the tree, to
+avoid feeding an unrelated prose file (a CHANGELOG, a wordlist fixture)
+through the requirement-line parser.
 
 The `-r`/`--requirement`/`-c`/`--constraint` directives above are now
 recognized in every separator form pip's own `optparse`-based
