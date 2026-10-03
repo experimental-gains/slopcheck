@@ -1668,6 +1668,15 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## Related tools
+
+Other no-signup CLIs from the same org:
+
+- **[modslop](https://github.com/experimental-gains/modslop)** — the same hallucinated/slopsquatted-name check for Go module paths in `go.mod`
+- **[hfaudit](https://github.com/experimental-gains/hfaudit)** — the same check for Hugging Face Hub model/dataset IDs
+- **[goproxycheck](https://github.com/experimental-gains/goproxycheck)** — diagnoses why a Go module version won't fetch via the public proxy/sumdb
+- **[goprivaudit](https://github.com/experimental-gains/goprivaudit)** — audits `GOPRIVATE`/`GONOSUMDB` config for private-module sumdb leaks
+
 ## Support
 
 If this caught something useful, a star helps others find it — that's

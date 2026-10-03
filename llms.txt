@@ -20,5 +20,11 @@ hallucinated).
 ## Docs
 - [README](https://github.com/experimental-gains/slopcheck/blob/main/README.md): full finding list (`not_found`/`recent`/`private`), `--fail-on` gate options, and verbatim pip/npm error strings this tool addresses
 
+## Related
+- [modslop](https://github.com/experimental-gains/modslop): same check, Go module paths in go.mod
+- [hfaudit](https://github.com/experimental-gains/hfaudit): same check, Hugging Face Hub model/dataset IDs
+- [goproxycheck](https://github.com/experimental-gains/goproxycheck): diagnoses Go module proxy/sumdb fetch failures
+- [goprivaudit](https://github.com/experimental-gains/goprivaudit): audits GOPRIVATE/GONOSUMDB config for sumdb leaks
+
 ## Repo
 - [Source](https://github.com/experimental-gains/slopcheck): MIT-licensed, currently at v0.1.90
