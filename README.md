@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.90
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.91
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.90
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.91
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.90
+    rev: v0.1.91
     hooks:
       - id: slopcheck
 ```
@@ -643,6 +643,25 @@ Pipenv project that also keeps tool config in a dependency-free
 as "0 dependencies checked, all clean" while its actual dependencies
 in `Pipfile` went unread).
 
+A `Pipfile` dependency sitting in a custom category — Pipenv's own
+`pipenv install --categories` feature, any top-level table name other
+than a fixed, Pipenv-internal exclusion list (`build-system`, `pipenv`,
+`requires`, `scripts`, `source`) — is now read too (fixed in v0.1.91).
+Reading Pipenv 2026.8.0's own source directly
+(`pipenv/utils/pipfile.py`'s `Pipfile.get_package_categories`) shows it
+treats every other top-level section as a genuine package category by
+default, with no `--categories` flag needed for `pipenv lock` to
+process it. Confirmed live: a `Pipfile` with a hallucinated name
+sitting only in an arbitrary `[feature-x-packages]` table made a real
+`pipenv lock` genuinely try and fail to resolve it from PyPI, the
+identical failure as a name in `[packages]`. Before this fix, only the
+two literal section names `packages`/`dev-packages` were read, so any
+custom category's dependencies — a real, documented Pipenv feature for
+splitting optional/feature-scoped dependency groups — were silently
+never checked at all, the same "0 dependencies checked, all clean"
+false-all-clear shape as every other manifest-coverage gap on this
+list.
+
 A [PEP 751](https://peps.python.org/pep-0751/) `pylock.toml` (or its
 named variant, `pylock.<name>.toml`) is now recognized as a manifest
 too (fixed in v0.1.64 — earlier versions had no filename entry for it
@@ -1041,6 +1060,13 @@ blanket case is detected by comparing the first source's `url` against
 the known public PyPI URLs, not merely by whether a source table exists
 at all — otherwise every ordinary, pure-public-PyPI `Pipfile` would be
 misdetected as private and silently swallow real hallucinations in it.
+A dependency's own `index = "<name>"` scoping key is now read from
+every Pipenv category section, not just `packages`/`dev-packages`
+(fixed in v0.1.91, alongside the manifest-coverage fix above) — a
+dependency living only in a custom category (e.g.
+`[feature-x-packages]`) with its own `index=` key is genuinely resolved
+against that scoped source by a real `pipenv lock`, confirmed live the
+same way as the single-category case.
 
 `uv` — now one of the most common Python dependency managers — has a
 fifth, independent private-registry mechanism: a `[[tool.uv.index]]`
