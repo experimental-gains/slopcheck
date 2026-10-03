@@ -126,12 +126,19 @@ def scan(paths: list[Path], max_workers: int = 16) -> list[tuple[Dependency, Loo
     # membership an entirely different way — a sibling `pnpm-workspace.yaml`,
     # not `package.json`'s `workspaces` field at all — so it needs its own
     # source of (root, member names) pairs; see `pnpm_workspace_member_names`.
+    # Passing `package_json_paths` too lets it discover that root even when
+    # only a workspace member directory was scanned and the root's own
+    # `pnpm-workspace.yaml` was never among `paths` at all — see
+    # `pnpm_workspace_root`'s docstring for the live-verified gap this
+    # closes, the pnpm analog of the identical fix already applied to
+    # npm/uv/PDM's own workspace-root discovery.
     # Filtered out here, before dedup/counting, the same "never became a
     # checkable dependency at all" treatment an ordinary `workspace:*`-
     # prefixed entry already gets.
-    workspace_pairs = npm_workspace_member_names(
-        [p for p in paths if p.name == "package.json"]
-    ) + pnpm_workspace_member_names([p for p in paths if p.name == "pnpm-workspace.yaml"])
+    package_json_paths = [p for p in paths if p.name == "package.json"]
+    workspace_pairs = npm_workspace_member_names(package_json_paths) + pnpm_workspace_member_names(
+        [p for p in paths if p.name == "pnpm-workspace.yaml"], package_json_paths
+    )
     if workspace_pairs:
         deps = [d for d in deps if not _is_npm_workspace_member(d, workspace_pairs)]
 

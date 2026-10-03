@@ -2046,8 +2046,68 @@ def _pnpm_workspace_patterns(text: str) -> list[str]:
     return patterns
 
 
-def pnpm_workspace_member_names(pnpm_workspace_paths: list[Path]) -> list[tuple[Path, set[str]]]:
-    """For every `pnpm-workspace.yaml` found, the local package names it resolves without the registry.
+def pnpm_workspace_root(start: Path) -> Path | None:
+    """Find the nearest ancestor directory whose `pnpm-workspace.yaml` claims `start` as a member.
+
+    The pnpm analog of `npm_workspace_root`/`uv_workspace_root`/
+    `pdm_workspace_root`: pnpm declares workspace membership in a sibling
+    file at the workspace *root* (`pnpm-workspace.yaml`), never inside a
+    member's own directory, so a member scanned on its own has no way to
+    see it unless something walks up looking for it -- exactly the gap
+    already closed for npm/Yarn Classic, uv, and PDM's own, differently-
+    shaped workspace mechanisms, just never ported to pnpm's.
+
+    Confirmed live (pnpm 12.8.1, a from-scratch two-package workspace: root
+    `pnpm-workspace.yaml` with `packages: ['packages/*']` and
+    `linkWorkspacePackages: true` -- pnpm's own current, documented setting
+    for resolving an ordinary-semver-range dependency on a workspace
+    sibling locally instead of from the registry; as of this pnpm version
+    it's read from `pnpm-workspace.yaml` itself, not a root `.npmrc` the
+    way an older pnpm accepted -- and member `packages/app` depending on
+    sibling `packages/internal-lib` with a plain `"^1.0.0"` range, no
+    `workspace:` protocol anywhere): running `pnpm install` from inside
+    `packages/app` itself resolved the sibling entirely locally (a real
+    symlink into `node_modules/@scratch/internal-lib`, confirmed via a
+    `--loglevel debug` trace with zero `registry.npmjs.org` requests for
+    that name) -- pnpm discovers the workspace root by walking up from the
+    current directory looking for `pnpm-workspace.yaml`, exactly mirroring
+    how `pdm_workspace_root`'s own docstring describes PDM doing the same
+    for its own workspace file. Before this fix, `slopcheck`, scanning only
+    `packages/app` (a realistic shape -- a monorepo CI job or pre-commit
+    hook scoped to one changed package, the exact pattern already fixed for
+    npm/uv/PDM), never saw the root's `pnpm-workspace.yaml` at all -- it
+    isn't even among the scanned manifests -- so the sibling's name was
+    reported a plain `not_found` hallucination instead of recognized as
+    locally-resolved; scanning the whole tree (so the root's
+    `pnpm-workspace.yaml` was among `paths` too) already worked correctly.
+
+    A plain nested `package.json` with no ancestor `pnpm-workspace.yaml`
+    whose `packages` glob actually resolves to `start` does not get this
+    treatment, mirroring every sibling `*_workspace_root` function's
+    identical exact-member-match rule rather than just the nearest ancestor
+    containing the workspace file.
+    """
+    start_resolved = start.resolve()
+    for ancestor in start_resolved.parents:
+        workspace_file = ancestor / "pnpm-workspace.yaml"
+        if not workspace_file.is_file():
+            continue
+        try:
+            text = workspace_file.read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        patterns = _pnpm_workspace_patterns(text)
+        if not patterns:
+            continue
+        if _workspace_patterns_include_dir(ancestor, patterns, start_resolved):
+            return ancestor
+    return None
+
+
+def pnpm_workspace_member_names(
+    pnpm_workspace_paths: list[Path], package_json_paths: list[Path] | None = None
+) -> list[tuple[Path, set[str]]]:
+    """For every `pnpm-workspace.yaml` found (directly, or discovered as a scanned package.json's workspace root), the local package names it resolves without the registry.
 
     The pnpm analog of `npm_workspace_member_names` above, for pnpm's own
     independent workspace-declaration mechanism (a sibling
@@ -2089,9 +2149,30 @@ def pnpm_workspace_member_names(pnpm_workspace_paths: list[Path]) -> list[tuple[
     hallucination — the exact failure shape `npm_workspace_member_names`
     already fixed for npm/Yarn Classic, just for pnpm's own, differently-
     shaped workspace-declaration file.
+
+    `package_json_paths` (optional, the scanned `package.json` files — e.g.
+    `cli.scan`'s own `paths`) lets this also discover a workspace root that
+    was never itself among the scanned paths at all: scanning only a
+    workspace *member* directory (the same realistic monorepo-CI/pre-commit
+    shape already fixed for npm via `npm_workspace_root`, uv via
+    `uv_workspace_root`, and PDM via `pdm_workspace_root`) never includes
+    the root's own `pnpm-workspace.yaml` in `pnpm_workspace_paths` — it
+    isn't even among the scanned manifests — so without this, a sibling
+    member's name was invisible no matter what. See `pnpm_workspace_root`'s
+    own docstring for the live-verified repro this closes. A root
+    discovered this way is folded in alongside any `pnpm-workspace.yaml`
+    passed directly, de-duplicated, so scanning the whole tree (where the
+    root is already in `pnpm_workspace_paths`) is unaffected.
     """
+    all_paths = list(pnpm_workspace_paths)
+    if package_json_paths:
+        project_roots = [p.parent for p in package_json_paths]
+        discovered_roots = {root for root in (pnpm_workspace_root(r) for r in project_roots) if root is not None}
+        all_paths.extend(root / "pnpm-workspace.yaml" for root in discovered_roots)
+    all_paths = list(dict.fromkeys(all_paths))
+
     pairs: list[tuple[Path, set[str]]] = []
-    for path in pnpm_workspace_paths:
+    for path in all_paths:
         if not path.is_file():
             continue
         try:

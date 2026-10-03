@@ -765,6 +765,78 @@ def test_npm_workspace_member_scoping_does_not_hide_an_unrelated_project_with_th
     assert result.status == "not_found"
 
 
+def test_pnpm_workspace_member_alone_still_sees_sibling(tmp_path: Path):
+    # End-to-end regression test for a real-world find: scanning *only* a
+    # pnpm workspace member directory (a realistic shape -- a monorepo CI
+    # job or pre-commit hook scoped to one changed package, the exact
+    # pattern already fixed for npm/uv/PDM via their own `*_workspace_root`
+    # helpers) never saw the workspace root's `pnpm-workspace.yaml` at all
+    # before this fix -- it isn't even among the scanned manifests, since
+    # `find_manifests` only walks *down* from the given root, never up.
+    # Confirmed live against real pnpm 12.8.1 (see `pnpm_workspace_root`'s
+    # own docstring for the full repro): running `pnpm install` from inside
+    # the member directory itself genuinely resolves a sibling workspace
+    # member's plain-semver-range dependency entirely locally. Scanning the
+    # whole tree already passed before this fix (`pnpm-workspace.yaml` was
+    # among the scanned paths then); this test is scoped to just the
+    # member's own subtree.
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(
+        json.dumps({"name": "app", "dependencies": {"@scratch/internal-lib": "^1.0.0"}})
+    )
+    sibling = root / "packages" / "internal-lib"
+    sibling.mkdir(parents=True)
+    (sibling / "package.json").write_text(json.dumps({"name": "@scratch/internal-lib", "private": True}))
+
+    with patch.dict(cli.CHECKERS, {"npm": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(member))
+
+    assert results == []
+
+
+def test_pnpm_workspace_member_alone_scoping_does_not_hide_an_unrelated_project_with_the_same_name(
+    tmp_path: Path,
+):
+    # Negative control for the root-discovery fix above: a root discovered
+    # via `pnpm_workspace_root` from one scanned member must still only
+    # scope that member's own subtree, not the whole scan -- an unrelated
+    # project elsewhere, naming an ordinary (non-workspace, non-local)
+    # dependency that merely happens to share a pnpm workspace member's
+    # name, must still be checked normally. Mirrors
+    # `test_npm_workspace_member_scoping_does_not_hide_an_unrelated_
+    # project_with_the_same_name` and `test_pdm_workspace_member_scoping_
+    # does_not_hide_an_unrelated_project_with_the_same_name` for pnpm's own
+    # workspace mechanism.
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "app", "dependencies": {}}))
+    sibling = root / "packages" / "internal-lib"
+    sibling.mkdir(parents=True)
+    (sibling / "package.json").write_text(json.dumps({"name": "@scratch/internal-lib", "private": True}))
+
+    other_project = tmp_path / "unrelated-project"
+    other_project.mkdir()
+    (other_project / "package.json").write_text(
+        json.dumps({"dependencies": {"@scratch/internal-lib": "^1.0.0"}})
+    )
+
+    with patch.dict(cli.CHECKERS, {"npm": _fake_checker(set())}):
+        results = cli.scan(cli.find_manifests(tmp_path))
+
+    assert len(results) == 1
+    dep, result = results[0]
+    assert dep.name == "@scratch/internal-lib"
+    assert str(other_project) in dep.source
+    assert result.status == "not_found"
+
+
 def test_print_report_labels_and_detail_formatting(capsys):
     # Regression test for a large family of mutmut survivors in
     # `_print_report`'s `labels` dict and detail-string formatting.

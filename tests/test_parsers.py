@@ -17,6 +17,7 @@ from slopcheck.parsers import (
     pdm_workspace_member_names,
     pdm_workspace_root,
     pnpm_workspace_member_names,
+    pnpm_workspace_root,
     requirements_txt_files_touched,
     uv_workspace_root,
 )
@@ -351,6 +352,106 @@ def test_pnpm_workspace_member_names_ignores_missing_or_empty_packages_key(tmp_p
     no_packages.write_text("onlyBuiltDependencies:\n  - some-native-pkg\n")
 
     assert pnpm_workspace_member_names([no_packages]) == []
+
+
+def test_pnpm_workspace_root_finds_ancestor_with_matching_packages_pattern(tmp_path: Path):
+    # Regression test for a real-world find: pnpm declares workspace
+    # membership in a sibling `pnpm-workspace.yaml` that lives at the
+    # workspace *root*, never inside a member's own directory -- so a
+    # member scanned on its own has no way to see it unless something
+    # walks up looking for it, the same gap already closed for npm
+    # (`npm_workspace_root`), uv (`uv_workspace_root`), and PDM
+    # (`pdm_workspace_root`), just never ported to pnpm's own,
+    # differently-shaped workspace file. Confirmed live (pnpm 12.8.1): see
+    # `pnpm_workspace_root`'s own docstring for the full repro -- pnpm
+    # genuinely discovers the workspace root by walking up from the current
+    # directory, and a plain-semver-range dependency on a sibling member
+    # resolved entirely locally (symlinked, zero registry requests) when
+    # `pnpm install` ran from inside the member directory itself.
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+
+    assert pnpm_workspace_root(member) == root
+
+
+def test_pnpm_workspace_root_none_without_packages_key(tmp_path: Path):
+    # The mirror image: an ancestor `pnpm-workspace.yaml` with no `packages`
+    # list at all (e.g. one that only sets `onlyBuiltDependencies`) does not
+    # claim any directory as a member.
+    root = tmp_path / "root"
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+    (root / "pnpm-workspace.yaml").write_text("onlyBuiltDependencies:\n  - some-native-pkg\n")
+
+    assert pnpm_workspace_root(member) is None
+
+
+def test_pnpm_workspace_root_none_when_packages_pattern_does_not_match(tmp_path: Path):
+    # An ancestor `pnpm-workspace.yaml` present but whose `packages` glob
+    # doesn't actually resolve to `start` must not match -- mirrors
+    # `uv_workspace_root`'s/`pdm_workspace_root`'s identical "ancestor
+    # present but pattern doesn't cover this directory" guard.
+    root = tmp_path / "root"
+    member = root / "not-members" / "app"
+    member.mkdir(parents=True)
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+
+    assert pnpm_workspace_root(member) is None
+
+
+def test_pnpm_workspace_root_none_with_no_ancestor_workspace_file(tmp_path: Path):
+    nested = tmp_path / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+
+    assert pnpm_workspace_root(nested) is None
+
+
+def test_pnpm_workspace_member_names_discovers_root_from_member_alone(tmp_path: Path):
+    # Regression test for the real-world find above, through
+    # `pnpm_workspace_member_names` itself: scanning *only* the member's own
+    # `package.json` (the root's `pnpm-workspace.yaml` is never passed in
+    # `pnpm_workspace_paths` at all -- it isn't even among the scanned
+    # manifests, the exact realistic shape a monorepo CI job or pre-commit
+    # hook scoped to one changed package produces) must still recognize a
+    # sibling member's declared name as locally-resolved. Before this fix,
+    # `pnpm_workspace_member_names` had no `package_json_paths` parameter at
+    # all and could never discover a root that wasn't passed directly, so
+    # `slopcheck` scanning just `packages/app` reported the sibling's name a
+    # plain `not_found` hallucination -- confirmed live against real pnpm
+    # 12.8.1 (see `pnpm_workspace_root`'s own docstring for the full repro).
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "app", "dependencies": {"internal-lib": "^1.0.0"}}))
+    sibling = root / "packages" / "internal-lib"
+    sibling.mkdir(parents=True)
+    (sibling / "package.json").write_text(json.dumps({"name": "internal-lib", "private": True}))
+
+    pairs = pnpm_workspace_member_names([], [member / "package.json"])
+
+    assert dict(pairs) == {root: {"app", "internal-lib"}}
+
+
+def test_pnpm_workspace_member_names_without_package_json_paths_still_works(tmp_path: Path):
+    # The `package_json_paths` parameter is optional -- scanning the whole
+    # tree (where the root's `pnpm-workspace.yaml` is already among
+    # `pnpm_workspace_paths`) must behave exactly as before this fix, with
+    # no `package_json_paths` argument at all.
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    member = root / "packages" / "internal-lib"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text(json.dumps({"name": "@scratch/pnpm-internal-lib", "private": True}))
+
+    pairs = pnpm_workspace_member_names([root / "pnpm-workspace.yaml"])
+
+    assert dict(pairs) == {root: {"@scratch/pnpm-internal-lib"}}
 
 
 def test_parse_manifest_reads_pnpm_workspace_yaml_overrides(tmp_path: Path):
