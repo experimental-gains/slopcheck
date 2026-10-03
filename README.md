@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.92
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.93
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.92
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.93
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.92
+    rev: v0.1.93
     hooks:
       - id: slopcheck
 ```
@@ -1210,7 +1210,7 @@ invisible no matter what.
 
 A pnpm workspace member scanned on its own now also discovers its
 workspace root's `pnpm-workspace.yaml`, the same way the PDM workspace
-fix above does for `[tool.pdm.workspace]` (fixed in v0.1.92). pnpm
+fix above does for `[tool.pdm.workspace]` (fixed in v0.1.93). pnpm
 declares workspace membership in a file that only ever lives at the
 monorepo root, never inside a member's own directory — so scanning just
 one member (a realistic shape: a monorepo CI job or pre-commit hook
@@ -1431,6 +1431,23 @@ member. Before this fix, `_npmrc_paths`/`_yarn_classic_rc_paths` only
 ever checked `.npmrc`/`.yarnrc` in the exact directory holding the
 scanned `package.json`, so a dependency a real `npm install`/`yarn
 install` would resolve against the workspace root's configured private
+registry was misreported as a plain `not_found` hallucination instead
+of downgraded to `private`.
+
+pnpm declares workspace membership an entirely different way — a
+sibling `pnpm-workspace.yaml`, not `package.json`'s `workspaces` field
+— so the npm/Yarn-Classic fix just above never covered it: scanning a
+pnpm workspace member directory on its own missed the enclosing
+monorepo root's `.npmrc` entirely (fixed in v0.1.93). pnpm is still
+npm-registry-compatible and reads the exact same `.npmrc` hierarchy —
+confirmed live (pnpm 12.8.1): `pnpm config get <scope>:registry`, run
+from inside a workspace member directory with no `.npmrc` of its own,
+genuinely resolved a scope mapping declared only in the enclosing
+`pnpm-workspace.yaml` root's `.npmrc`; the identical command run from a
+sibling directory the root's `packages:` glob does *not* match
+returned `undefined`, confirming it's a real member-match rule, not
+just "any ancestor `.npmrc`". Before this fix, a dependency a real
+`pnpm install` would resolve against the root-configured private
 registry was misreported as a plain `not_found` hallucination instead
 of downgraded to `private`.
 
