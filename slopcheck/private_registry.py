@@ -34,6 +34,7 @@ from .parsers import (
     _pipfile_category_sections,
     npm_workspace_root,
     pdm_workspace_root,
+    pnpm_workspace_root,
     uv_workspace_root,
 )
 
@@ -378,6 +379,27 @@ def _npmrc_paths(project_roots: list[Path]) -> list[Path]:
         workspace_root = npm_workspace_root(root)
         if workspace_root is not None:
             paths.append(workspace_root / ".npmrc")
+    # pnpm declares workspace membership an entirely different way (a
+    # sibling `pnpm-workspace.yaml`, not `package.json`'s `workspaces`
+    # field — see `pnpm_workspace_root`), but pnpm is still npm-registry-
+    # compatible and reads the exact same `.npmrc` hierarchy — confirmed
+    # live (pnpm 12.8.1): `pnpm config get <scope>:registry`, run from
+    # inside a workspace member directory with *no* `.npmrc` of its own,
+    # genuinely resolved a scope mapping declared only in the enclosing
+    # pnpm-workspace.yaml root's `.npmrc`; the identical command run from a
+    # sibling directory the root's `packages:` glob does *not* match
+    # returned `undefined`, confirming it's a real member-match rule, not
+    # just "any ancestor .npmrc". Before this fix, scanning a pnpm
+    # workspace member directory on its own never saw the root's `.npmrc`
+    # at all (`npm_workspace_root` only recognizes npm/Yarn-Classic's
+    # `package.json` `workspaces` field, not pnpm's separate file), so a
+    # dependency a real `pnpm install` would resolve against the
+    # root-configured private registry was misreported as a plain
+    # `not_found` hallucination instead of downgraded to `private`.
+    for root in project_roots:
+        pnpm_root = pnpm_workspace_root(root)
+        if pnpm_root is not None:
+            paths.append(pnpm_root / ".npmrc")
     paths.append(Path(user_config) if user_config else Path.home() / ".npmrc")
     paths.extend(_npm_global_config_paths())
     return paths

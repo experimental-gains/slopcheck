@@ -747,6 +747,68 @@ def test_npm_private_registry_ignores_ancestor_npmrc_without_workspaces_match(
     assert scopes == set()
 
 
+def test_npm_private_registry_from_pnpm_workspace_root_npmrc(tmp_path: Path, monkeypatch):
+    """pnpm declares workspace membership an entirely different way (a
+    sibling `pnpm-workspace.yaml`, not `package.json`'s `workspaces` field —
+    see `pnpm_workspace_root`), but pnpm is still npm-registry-compatible
+    and reads the exact same `.npmrc` hierarchy. Confirmed live (pnpm
+    12.8.1): a two-level layout (`root/pnpm-workspace.yaml` with `packages:
+    ['packages/*']` plus `root/.npmrc` carrying a `@scratchacme:registry=...`
+    scope mapping, and `root/packages/app/package.json` with *no* `.npmrc`
+    of its own) run from inside `packages/app` itself — `pnpm config get
+    @scratchacme:registry` genuinely resolved the root's mapping with zero
+    `.npmrc` anywhere else. Before this fix, `_npmrc_paths` only ever walked
+    `npm_workspace_root` (npm/Yarn-Classic's `package.json` `workspaces`
+    field), never `pnpm_workspace_root`, so this scope mapping was invisible
+    whenever the scan target was a pnpm workspace member directory alone,
+    misreporting a genuinely private-only dependency as plain `not_found`
+    instead of downgraded to `private`."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    root = tmp_path / "root"
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    (root / ".npmrc").write_text("@scratchacme:registry=https://npm.internal.example/\n")
+    (member / "package.json").write_text('{"name": "@scratchacme/app", "version": "1.0.0"}')
+
+    blanket, scopes = npm_private_registry_context([member])
+
+    assert blanket is False
+    assert scopes == {"@scratchacme"}
+
+
+def test_npm_private_registry_ignores_ancestor_npmrc_without_pnpm_packages_match(
+    tmp_path: Path, monkeypatch
+):
+    """The mirror image of the pnpm-workspace-root fix above: confirmed live
+    (`pnpm config get @scratchacme:registry` from inside a sibling directory
+    the root's `packages:` glob does *not* match) that a plain nested
+    `package.json` with no matching `pnpm-workspace.yaml` membership does
+    *not* get this treatment. Applying the workspace-root walk unconditionally
+    (regardless of an actual `packages:` glob match) would risk the opposite
+    bug: wrongly suppressing a genuine hallucination just because an
+    unrelated ancestor directory happens to carry a `pnpm-workspace.yaml`
+    and an `.npmrc`."""
+    monkeypatch.delenv("npm_config_registry", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_REGISTRY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    root = tmp_path / "root"
+    member = root / "notmember"
+    member.mkdir(parents=True)
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+    (root / ".npmrc").write_text("@scratchacme:registry=https://npm.internal.example/\n")
+    (member / "package.json").write_text('{"name": "@scratchacme/notmember", "version": "1.0.0"}')
+
+    blanket, scopes = npm_private_registry_context([member])
+
+    assert blanket is False
+    assert scopes == set()
+
+
 _DEFAULT_GLOBAL_NPMRC_PATHS = [Path("/etc/npmrc"), Path("/usr/local/etc/npmrc")]
 
 
