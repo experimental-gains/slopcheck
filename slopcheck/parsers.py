@@ -1267,20 +1267,65 @@ def _poetry_non_registry_names(data: dict) -> set[str]:
 
     Reuses `_is_poetry_registry_dep` (already handles the multiple-
     constraints list form and the git/path/url key set) rather than
-    duplicating its logic; only `[tool.poetry.dependencies]` is read here —
-    `[tool.poetry.dev-dependencies]`/`[tool.poetry.group.*.dependencies]`
-    only ever enrich the *legacy* (non-PEP-621) declaration path `_poetry_deps`
-    already reads directly, so including them here would just be inert
-    (their names never coincide with anything `_pep621_deps` emits from
-    `[project.optional-dependencies]`, which is PEP 621's own extras
-    mechanism, distinct from Poetry's dependency groups).
+    duplicating its logic.
+
+    The claim above ("only `[tool.poetry.dependencies]` is read here —
+    `[tool.poetry.group.*.dependencies]` only ever enrich the *legacy*
+    declaration path") was wrong: `Factory._configure_package_dependency_groups`
+    (same poetry-core file, read directly) does the identical by-name merge
+    for PEP 735 `[dependency-groups]` whenever a `[tool.poetry.group.<name>]`
+    table shares that group's name — `DependencyGroup.dependencies_for_locking`
+    folds `_poetry_dependencies` (populated from `[tool.poetry.group.<name>.
+    dependencies]` via `_add_package_poetry_group_dependencies`) into
+    `_dependencies` (populated from `[dependency-groups].<name>` via
+    `_add_package_pep735_group_dependencies`) by matching dependency name,
+    exactly mirroring how `[tool.poetry.dependencies]` enriches the MAIN
+    group's `[project.dependencies]` entries.
+
+    Live-verified against real Poetry 2.5.1 (`poetry lock -vvv`): a scratch
+    pyproject.toml with `[dependency-groups] test =
+    ["totally-hallucinated-slopcheck-group-test-xyz-999"]` plus
+    `[tool.poetry.group.test.dependencies] totally-hallucinated-slopcheck-
+    group-test-xyz-999 = {git = "file:///tmp/fakepkg"}` (a local git repo
+    whose own pyproject.toml declares that exact name, confirmed to 404 on
+    the real public PyPI JSON API) made `poetry lock` clone the git repo and
+    resolve the dependency with zero requests to pypi.org — `poetry.lock`
+    records it as a plain git-sourced package. Before this fix,
+    `_dependency_groups_deps` (PEP 735) still emitted the bare name as a raw
+    spec, nothing excluded it (this function only ever read
+    `[tool.poetry.dependencies]`, never `[tool.poetry.group.*]`), and
+    `slopcheck` reported `not_found` for a dependency a real `poetry lock`/
+    `poetry install --with test` never touches PyPI for at all — the same
+    false-hallucination-on-a-legitimately-git-sourced-name shape the MAIN
+    group fix above was built to close, just for the dependency-groups/
+    poetry-group pairing instead of the project-dependencies/tool-poetry
+    pairing.
+
+    Deliberately not scoped to only groups whose name also appears in
+    `[dependency-groups]`: a `[tool.poetry.group.<name>.dependencies]` table
+    with no matching `[dependency-groups]` entry (pure legacy Poetry-group
+    usage) never gets its names emitted into `raw_specs` by any other
+    reader either, so including its git/path/url-sourced names in this
+    skip-set unconditionally is a no-op for that case and correct for the
+    PEP-735-overlap case — the same whole-table-not-precise-overlap
+    conservatism `pdm_private_registry_context`'s own docstring already
+    accepts for a structurally similar scoping question.
     """
     poetry = data.get("tool", {}).get("poetry", {})
-    return {
+    names = {
         _normalize_name(name)
         for name, spec in poetry.get("dependencies", {}).items()
         if not _is_poetry_registry_dep(spec)
     }
+    for group in poetry.get("group", {}).values():
+        if not isinstance(group, dict):
+            continue
+        names |= {
+            _normalize_name(name)
+            for name, spec in group.get("dependencies", {}).items()
+            if not _is_poetry_registry_dep(spec)
+        }
+    return names
 
 
 def _self_referential_name(data: dict) -> set[str]:

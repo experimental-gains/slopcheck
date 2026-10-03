@@ -1125,6 +1125,48 @@ def test_parse_pyproject_poetry2_dependencies_overrides_pep621_source(tmp_path: 
     assert names == {"mkdocs"}
 
 
+def test_parse_pyproject_poetry_group_dependencies_overrides_dependency_groups_source(tmp_path: Path):
+    # The identical enrichment shape as
+    # test_parse_pyproject_poetry2_dependencies_overrides_pep621_source above,
+    # one layer over: Poetry 2.0+ merges a [tool.poetry.group.<name>] table's
+    # own `dependencies` into the *same-named* PEP 735 [dependency-groups]
+    # entry by dependency name (poetry-core's
+    # `Factory._configure_package_dependency_groups` ->
+    # `DependencyGroup.dependencies_for_locking`), exactly mirroring how
+    # [tool.poetry.dependencies] enriches [project.dependencies]'s MAIN
+    # group. Live-verified against real Poetry 2.5.1 (`poetry lock -vvv`): a
+    # pyproject.toml with `[dependency-groups] test =
+    # ["totally-hallucinated-slopcheck-group-test-xyz-999"]` and
+    # `[tool.poetry.group.test.dependencies] totally-hallucinated-slopcheck-
+    # group-test-xyz-999 = { git = "file:///tmp/fakepkg" }` (a local repo
+    # whose own pyproject.toml names that exact package, confirmed to 404 on
+    # the real public PyPI JSON API) made `poetry lock` clone the git repo
+    # and resolve it with zero requests to pypi.org. Before this fix,
+    # `_dependency_groups_deps` still emitted the bare hallucinated name with
+    # nothing to skip it (`_poetry_non_registry_names` only ever read
+    # [tool.poetry.dependencies], never [tool.poetry.group.*]), so a real
+    # git-sourced dependency-group entry was checked against PyPI and
+    # reported `not_found`. "pytest" is a plain [dependency-groups] entry
+    # with no [tool.poetry.group.test] counterpart at all, confirming the
+    # override only drops the name it actually names.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = []
+
+        [dependency-groups]
+        test = ["totally-hallucinated-slopcheck-group-test-xyz-999", "pytest"]
+
+        [tool.poetry.group.test.dependencies]
+        totally-hallucinated-slopcheck-group-test-xyz-999 = { git = "https://example.com/fork.git" }
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"pytest"}
+
+
 def test_parse_pyproject_poetry_legacy_dev_dependencies(tmp_path: Path):
     # Pre-1.2 Poetry used [tool.poetry.dev-dependencies] instead of a
     # [tool.poetry.group.*.dependencies] table; both forms are still seen
