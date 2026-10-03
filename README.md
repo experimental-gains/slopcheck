@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.88
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.89
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.88
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.89
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.88
+    rev: v0.1.89
     hooks:
       - id: slopcheck
 ```
@@ -470,6 +470,19 @@ entirely). Confirmed live against real Poetry 2.5.1: a `pyproject.toml`
 with `[project] dependencies = ["requests"]` plus
 `[tool.poetry.dependencies] requests = { git = "..." }` made `poetry
 lock` clone the git repo for `requests` and never once query PyPI for
+that name.
+
+Poetry 2.0+ does the identical by-name source-override merge one layer
+over, for PEP 735 `[dependency-groups]` entries that share a name with a
+`[tool.poetry.group.<name>]` table — this is now recognized too (fixed
+in v0.1.89 — earlier versions only checked `[tool.poetry.dependencies]`
+for this override, never `[tool.poetry.group.*.dependencies]`, so a
+git/path/url source attached to a dependency-group entry this way was
+ignored and the bare name was checked against PyPI instead). Confirmed
+live against real Poetry 2.5.1: a `pyproject.toml` with
+`[dependency-groups] test = ["some-package"]` plus
+`[tool.poetry.group.test.dependencies] some-package = { git = "..." }`
+made `poetry lock` clone the git repo and never once query PyPI for
 that name.
 
 uv's own source-override mechanism, `[tool.uv.sources]`, is the same
