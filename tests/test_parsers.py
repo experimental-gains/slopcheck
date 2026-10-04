@@ -1731,6 +1731,64 @@ def test_parse_pyproject_hatch_env_overrides_dependencies(tmp_path: Path):
     }
 
 
+def test_parse_pyproject_hatch_build_dependencies(tmp_path: Path):
+    # Hatch has a *second*, entirely separate family of dependency fields
+    # from the three [tool.hatch.env]/[tool.hatch.envs.*] tests above:
+    # [tool.hatch.build] and its sub-tables, read by hatchling's own build
+    # backend (not its environment manager) when computing the PEP 517
+    # isolated-build-environment requirements, analogous to [build-system]
+    # requires but computed dynamically rather than declared statically.
+    # Read directly from installed hatchling 1.28's `builders/config.py`
+    # (`BuilderConfig.dependencies`): it merges
+    # [tool.hatch.build].dependencies (global),
+    # [tool.hatch.build.targets.<target>].dependencies (per build target),
+    # [tool.hatch.build.hooks.<hook>].dependencies (global build hooks), and
+    # [tool.hatch.build.targets.<target>.hooks.<hook>].dependencies
+    # (target-specific build hooks).
+    #
+    # Confirmed live with real hatchling 1.28 (via pip) against a scratch
+    # project with [build-system] requires = ["hatchling"] and
+    # [tool.hatch.build] dependencies = ["totally-hallucinated-hatch-build-
+    # dep-xyz-741"]: `pip install .` ran "Installing backend dependencies"
+    # as its own step (after "Getting requirements to build wheel" already
+    # succeeded) and genuinely failed resolving the fake name from PyPI
+    # ("Could not find a version that satisfies the requirement ... (from
+    # versions: none)"). Before this fix, nothing in this module read
+    # [tool.hatch.build] at all (only [tool.hatch.env]/[tool.hatch.envs.*]
+    # were read), so a hallucinated name planted in any of its four
+    # dependency-bearing sub-fields was silently never checked even though
+    # a real `pip install .`/`pip wheel .`/`python -m build` genuinely
+    # tries to resolve it before the build even starts.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests"]
+
+        [tool.hatch.build]
+        dependencies = ["totally-hallucinated-hatch-build-dep-xyz-741"]
+
+        [tool.hatch.build.hooks.custom]
+        dependencies = ["totally-hallucinated-hatch-build-hook-dep-xyz-2"]
+
+        [tool.hatch.build.targets.wheel]
+        dependencies = ["totally-hallucinated-hatch-build-target-dep-xyz-3"]
+
+        [tool.hatch.build.targets.wheel.hooks.vcs]
+        dependencies = ["totally-hallucinated-hatch-build-target-hook-dep-xyz-4"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {
+        "requests",
+        "totally-hallucinated-hatch-build-dep-xyz-741",
+        "totally-hallucinated-hatch-build-hook-dep-xyz-2",
+        "totally-hallucinated-hatch-build-target-dep-xyz-3",
+        "totally-hallucinated-hatch-build-target-hook-dep-xyz-4",
+    }
+
+
 def test_parse_pyproject_build_system_requires(tmp_path: Path):
     # PEP 518 makes [build-system] requires mandatory for any project pip
     # can build from source — a plain list of PEP 508 requirement strings

@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.98
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.99
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.98
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.99
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.98
+    rev: v0.1.99
     hooks:
       - id: slopcheck
 ```
@@ -798,6 +798,30 @@ resolving dependencies ... was not found in the package registry").
 Earlier versions had no reader for either table, so a hallucinated
 name planted in one sailed through unchecked even though a real
 `hatch env create` genuinely installs it.
+
+Hatch has a *second*, completely separate family of dependency fields
+on top of the environment-manager tables above: `[tool.hatch.build]`
+and its sub-tables, read by hatchling's own build backend (not its
+environment manager) when computing the PEP 517 isolated-build-
+environment requirements, analogous to `[build-system] requires` but
+computed dynamically — `[tool.hatch.build].dependencies` (global),
+`[tool.hatch.build.targets.<target>].dependencies` (per build target),
+`[tool.hatch.build.hooks.<hook>].dependencies` (global build hooks),
+and `[tool.hatch.build.targets.<target>.hooks.<hook>].dependencies`
+(target-specific build hooks) — are now all read too (fixed in
+v0.1.99). Confirmed live with real hatchling 1.28 (via pip): a scratch
+project with `[build-system] requires = ["hatchling"]` and
+`[tool.hatch.build] dependencies =
+["totally-hallucinated-hatch-build-dep-xyz-741"]` made `pip install .`
+run "Installing backend dependencies" as its own step (after "Getting
+requirements to build wheel" already succeeded) and genuinely fail
+resolving the fake name from PyPI ("Could not find a version that
+satisfies the requirement ... (from versions: none)"). Earlier
+versions had no reader for `[tool.hatch.build]` at all, so a
+hallucinated name planted in any of its four dependency-bearing
+sub-fields sailed through unchecked even though a real `pip install .`/
+`pip wheel .`/`python -m build` genuinely tries to resolve it before
+the build even starts.
 
 The `[tool.uv.sources]` git/path/workspace/url skip above (the one that
 keeps `marimo_docs` from being flagged) was, until v0.1.41, applied to

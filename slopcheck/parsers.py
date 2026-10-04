@@ -470,6 +470,83 @@ def _hatch_override_deps(env: dict) -> list[str]:
     return names
 
 
+def _hatch_build_deps(data: dict) -> list[str]:
+    """Flatten Hatch's `[tool.hatch.build]` dependency fields (distinct from `[tool.hatch.env]`/`[tool.hatch.envs.*]`) into requirement specs.
+
+    Hatch has a *second*, completely separate family of dependency fields,
+    under `[tool.hatch.build]` rather than `[tool.hatch.env]`/
+    `[tool.hatch.envs.*]` (the table `_hatch_deps` reads): build-time
+    dependencies Hatch's own build backend (hatchling) installs into the
+    PEP 517 isolated build environment before producing a wheel/sdist,
+    analogous to `[build-system] requires` but computed dynamically by
+    hatchling itself rather than declared statically. Read directly from
+    installed hatchling 1.28's own `builders/config.py`
+    (`BuilderConfig.dependencies`, a `cached_property`) and `build.py`
+    (`get_requires_for_build_wheel`/`_sdist`/`_editable`, all three of
+    which return `builder.config.dependencies`): this property merges, as
+    plain requirement strings, `tool.hatch.build.dependencies` (global),
+    `tool.hatch.build.targets.<target>.dependencies` (per build-target
+    override), `tool.hatch.build.hooks.<hook>.dependencies` (global build
+    hooks), and `tool.hatch.build.targets.<target>.hooks.<hook>.dependencies`
+    (target-specific build hooks) — four distinct sub-fields, none of them
+    under `[tool.hatch.env]`/`[tool.hatch.envs.*]` and none read by any
+    function in this module before this fix.
+
+    Confirmed live and current (hatchling 1.28 via `pip`, scratch project
+    with `[build-system] requires = ["hatchling"]` /
+    `build-backend = "hatchling.build"` and `[tool.hatch.build] dependencies
+    = ["totally-hallucinated-hatch-build-dep-xyz-741"]`, nothing else
+    referencing that name): `pip install .` genuinely ran "Installing
+    backend dependencies" as its own separate step (after "Getting
+    requirements to build wheel" already succeeded) and failed resolving the
+    fake name from PyPI ("Could not find a version that satisfies the
+    requirement totally-hallucinated-hatch-build-dep-xyz-741 (from versions:
+    none)") — i.e. a real `pip install .`/`pip wheel .`/`python -m build`
+    installs whatever is planted in any of these four sub-fields just as
+    much as `[build-system] requires`. Before this fix,
+    `parse_pyproject_toml`'s only Hatch reader was `_hatch_deps`
+    (`[tool.hatch.env]`/`[tool.hatch.envs.*]` only), so a hallucinated name
+    planted in `[tool.hatch.build]` or any of its `targets`/`hooks`
+    sub-tables was silently never checked even though a real `pip install .`
+    genuinely tries to resolve it before the build even starts — the same
+    silent false-all-clear shape already fixed here for every other
+    unhandled Hatch/PEP 621/PEP 735 field, just for hatchling's build
+    backend itself rather than its environment manager.
+
+    Like `_build_system_deps`, no `skip_names` filtering applies: these are
+    resolved by pip's isolated-build-environment step (the exact same
+    mechanism `[build-system] requires` uses, confirmed by hatchling's own
+    `get_requires_for_build_*` hooks returning this same property), not by
+    whatever tool (uv, Poetry, pip, PDM) resolves the project's own
+    `[project.dependencies]`/dev dependencies, so `[tool.uv.sources]`/
+    Poetry's table-form git/path/url overrides don't apply to it.
+    """
+    names: list[str] = []
+    build = data.get("tool", {}).get("hatch", {}).get("build", {})
+    if not isinstance(build, dict):
+        return names
+
+    def _hook_deps(hooks) -> list[str]:
+        out: list[str] = []
+        if not isinstance(hooks, dict):
+            return out
+        for hook_config in hooks.values():
+            if isinstance(hook_config, dict):
+                out.extend(d for d in hook_config.get("dependencies", []) if isinstance(d, str))
+        return out
+
+    names.extend(d for d in build.get("dependencies", []) if isinstance(d, str))
+    names.extend(_hook_deps(build.get("hooks", {})))
+    targets = build.get("targets", {})
+    if isinstance(targets, dict):
+        for target in targets.values():
+            if not isinstance(target, dict):
+                continue
+            names.extend(d for d in target.get("dependencies", []) if isinstance(d, str))
+            names.extend(_hook_deps(target.get("hooks", {})))
+    return names
+
+
 def _is_poetry_registry_dep(spec) -> bool:
     """Whether a Poetry dependency spec resolves against PyPI at all.
 
@@ -1571,7 +1648,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
             if _normalize_name(name) in skip_names:
                 continue
             deps.append(Dependency(name, "pypi", str(path)))
-    for spec in _build_system_deps(data) + _hatch_deps(data):
+    for spec in _build_system_deps(data) + _hatch_deps(data) + _hatch_build_deps(data):
         spec = _require_str_spec(spec, path)
         match = _REQ_LINE_RE.match(spec.strip())
         if match:
