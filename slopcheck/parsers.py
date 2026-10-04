@@ -1417,6 +1417,59 @@ def _self_referential_name(data: dict) -> set[str]:
     return {_normalize_name(name)} if isinstance(name, str) else set()
 
 
+def _require_str_spec(spec, path: Path) -> str:
+    """Guard a PEP 621/518/Hatch requirement-spec entry against a non-string value.
+
+    `[project.dependencies]`/`[project.optional-dependencies]` (PEP 621),
+    `[build-system] requires` (PEP 518), and Hatch's own `[tool.hatch.env]
+    requires`/`[tool.hatch.envs.*].dependencies`/`extra-dependencies` are all
+    documented as plain lists of PEP 508 requirement *strings*, with no dict
+    or other table-shaped alternative in any of their schemas (unlike PEP 735
+    `[dependency-groups]`'s `{include-group = "..."}` reference form, or
+    PDM's legacy `[tool.pdm.dev-dependencies]`, both of which already filter
+    to `isinstance(item, str)` themselves in their own readers since a
+    non-string entry there is a legitimate, documented shape, not a schema
+    violation). TOML itself doesn't enforce that a list is homogeneous, so a
+    hand-edited or LLM-written pyproject.toml can genuinely put a bare number
+    (or any other non-string value) in one of these lists without the TOML
+    parser itself ever objecting — which real tooling then rejects hard
+    before resolving a single dependency, rather than silently coping.
+
+    Confirmed live and real, not hypothetical: pip's own shipped test fixture
+    `tests/data/src/pep518_invalid_requires/pyproject.toml` ships exactly
+    `[build-system] requires = [1, 2, 3]  # not a list of strings` (present
+    in every checkout of github.com/pypa/pip, a real repository a user might
+    point slopcheck at directly) — real `pip install --dry-run` on a project
+    with that table Fatals immediately with pip's own dedicated error code,
+    `error: invalid-pyproject-build-system-requires` / "It is not a list of
+    strings", before ever attempting to resolve anything. The PEP 621
+    `[project.dependencies]` equivalent Fatals the same way, just one layer
+    deeper (confirmed live: `dependencies = [1, 2]` makes the setuptools
+    build backend raise `ValueError: invalid pyproject.toml config:
+    'project.dependencies[0]' ... must be string` during the build-requires
+    subprocess pip itself spawns).
+
+    Before this fix, `parse_pyproject_toml`'s two raw-spec loops called
+    `spec.strip()` on every entry unconditionally, assuming every item collected
+    from `_pep621_deps`/`_build_system_deps`/`_hatch_deps` was already a
+    string — true for any schema-valid file, but not guaranteed by the TOML
+    parser itself. Scanning pip's own real repository crashed slopcheck
+    outright (`AttributeError: 'int' object has no attribute 'strip'`,
+    an unhandled traceback with a non-zero-but-wrong exit code) instead of
+    reporting a clean error — the exact "unhandled traceback from deep
+    inside the parser" shape `ManifestParseError` exists to replace, just
+    reached from malformed list *contents* instead of malformed TOML/JSON
+    syntax or encoding.
+    """
+    if not isinstance(spec, str):
+        raise ManifestParseError(
+            f"{path}: found a non-string dependency entry ({spec!r}) in a requirement list "
+            "-- real pip/setuptools reject this before resolving anything, so it can't be "
+            "treated as a parseable requirement name"
+        )
+    return spec
+
+
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
     # skip_names (derived from [tool.uv.sources]'s git/path/workspace/url
     # entries, [tool.poetry.dependencies]'s equivalent git/path/url overrides
@@ -1462,6 +1515,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
     )
     deps = []
     for spec in raw_specs:
+        spec = _require_str_spec(spec, path)
         match = _REQ_LINE_RE.match(spec.strip())
         if match:
             name = match.group("name")
@@ -1469,6 +1523,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
                 continue
             deps.append(Dependency(name, "pypi", str(path)))
     for spec in _build_system_deps(data) + _hatch_deps(data):
+        spec = _require_str_spec(spec, path)
         match = _REQ_LINE_RE.match(spec.strip())
         if match:
             deps.append(Dependency(match.group("name"), "pypi", str(path)))

@@ -1661,6 +1661,53 @@ def test_parse_pyproject_build_system_requires(tmp_path: Path):
     assert names == {"requests", "meson-python", "Cython"}
 
 
+def test_parse_pyproject_non_string_build_system_requires_raises_clean_error(tmp_path: Path):
+    # Real, live pip test fixture: pypa/pip's own repo ships
+    # tests/data/src/pep518_invalid_requires/pyproject.toml with exactly
+    # this shape (`requires = [1, 2, 3]  # not a list of strings`), and
+    # scanning pip's own checkout crashed slopcheck outright with
+    # `AttributeError: 'int' object has no attribute 'strip'` instead of a
+    # clean error — real `pip install` on a project with this table Fatals
+    # immediately ("error: invalid-pyproject-build-system-requires", "It is
+    # not a list of strings") before resolving anything, so a clean
+    # ManifestParseError (not a crash, not a silent skip) is the correct
+    # outcome here, mirroring how this module already reports any other
+    # unparseable manifest.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [build-system]
+        requires = [1, 2, 3]
+        """
+    )
+    try:
+        parse_pyproject_toml(pyproject)
+        assert False, "expected ManifestParseError"
+    except ManifestParseError as e:
+        assert "pyproject.toml" in str(e)
+
+
+def test_parse_pyproject_non_string_project_dependency_raises_clean_error(tmp_path: Path):
+    # Same crash shape, reached through [project.dependencies] instead of
+    # [build-system] requires. Confirmed live: setuptools' own
+    # pyproject.toml reader Fatals the same way ("configuration error:
+    # 'project.dependencies[0]' must be string") during the build-requires
+    # subprocess a real `pip install` spawns.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = [1, 2]
+        """
+    )
+    try:
+        parse_pyproject_toml(pyproject)
+        assert False, "expected ManifestParseError"
+    except ManifestParseError as e:
+        assert "pyproject.toml" in str(e)
+
+
 def test_parse_pyproject_uv_sources_skip_does_not_leak_into_build_system_or_hatch(
     tmp_path: Path,
 ):

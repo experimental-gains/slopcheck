@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.95
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.96
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.95
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.96
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.95
+    rev: v0.1.96
     hooks:
       - id: slopcheck
 ```
@@ -797,6 +797,30 @@ fail with "Could not find a version that satisfies the requirement
 same file reported "2 dependencies checked, all clean", silently
 skipping the fabricated build dependency purely because its name
 happened to collide with an unrelated `[tool.uv.sources]` entry.
+
+A non-string entry in `[project.dependencies]`/`[project.optional-
+dependencies]`, `[build-system] requires`, or either Hatch
+dependency table no longer crashes the whole scan (fixed in v0.1.96).
+None of those tables' schemas allow anything but a plain list of PEP
+508 requirement strings, but TOML itself doesn't enforce that a list
+stays homogeneous, so a hand-edited or LLM-written `pyproject.toml`
+can genuinely put a bare number there without the TOML parser
+objecting. Confirmed real and current: pypa/pip's own repository
+ships `tests/data/src/pep518_invalid_requires/pyproject.toml` with
+exactly `requires = [1, 2, 3]  # not a list of strings` — scanning a
+real, unmodified checkout of `github.com/pypa/pip` crashed slopcheck
+outright with `AttributeError: 'int' object has no attribute
+'strip'` instead of a clean error. Real `pip install` on a project
+with this table Fatals immediately with its own dedicated error
+(`error: invalid-pyproject-build-system-requires`, "It is not a list
+of strings") before resolving anything at all; the PEP 621
+`[project.dependencies]` equivalent Fatals the same way one layer
+deeper, inside the setuptools build backend. Before this fix, both of
+`parse_pyproject_toml`'s raw-spec loops assumed every entry was
+already a string and called `.strip()` on it unconditionally; now a
+non-string entry raises the same clean, file-naming
+`ManifestParseError` any other unparseable manifest already gets,
+rather than an unhandled traceback.
 
 ## Private/internal registries
 
