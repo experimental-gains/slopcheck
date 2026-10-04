@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.97
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.98
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.97
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.98
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.97
+    rev: v0.1.98
     hooks:
       - id: slopcheck
 ```
@@ -760,6 +760,26 @@ now defaults to writing `[dependency-groups]` instead. Earlier versions
 had no reader for this table at all, so a hallucinated name planted
 only in a still-common, still-honored PDM dev-dependency group sailed
 through unchecked.
+
+uv has its own, separate legacy dev-dependency table — `[tool.uv]
+dev-dependencies`, a flat list of PEP 508 requirement strings,
+predating PEP 735 the same way PDM's legacy table above does — and it
+is now read too (fixed in v0.1.98). Confirmed live against real uv
+0.12.19: `uv lock -v` run against a `pyproject.toml` with a fake name
+planted only in `[tool.uv] dev-dependencies` genuinely sent `GET
+https://pypi.org/simple/<name>/` and failed resolution ("was not
+found in the package registry") — uv prints a deprecation warning for
+this table ("will be removed in a future release; use
+`dependency-groups.dev` instead") but still honors it, so a real `uv
+lock`/`uv sync` installs whatever's planted here just as much as a
+`[dependency-groups]` entry. A name here is still skipped when
+`[tool.uv.sources]` gives it a git/path/workspace/url source, exactly
+like a `[project.dependencies]` entry — confirmed live the same way.
+Earlier versions had no reader for this table at all (only its
+sub-tables, `[tool.uv.sources]`/`[tool.uv.workspace]`, were read), so
+a hallucinated name planted only here sailed through unchecked:
+`parse_pyproject_toml` returned zero dependencies against a file a
+real `uv lock` genuinely fails on.
 
 Hatch's own two dependency-bearing tables — `[tool.hatch.env] requires`
 (environment-plugin packages Hatch installs before it can even parse

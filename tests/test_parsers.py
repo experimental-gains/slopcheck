@@ -1555,6 +1555,46 @@ def test_parse_pyproject_pdm_dev_dependencies(tmp_path: Path):
     assert names == {"requests", "pytest"}
 
 
+def test_parse_pyproject_uv_legacy_dev_dependencies(tmp_path: Path):
+    # uv's own legacy `[tool.uv] dev-dependencies` list (predates PEP 735) —
+    # a flat list of PEP 508 requirement strings, structurally identical to
+    # [project.dependencies], under a sibling sub-key of [tool.uv] from the
+    # already-read [tool.uv.sources]/[tool.uv.workspace]. Confirmed live
+    # with real uv 0.12.19 (`uv lock -v` against exactly this shape): it
+    # genuinely sent a GET to https://pypi.org/simple/<name>/ and failed
+    # resolution ("was not found in the package registry") for the fake
+    # name — uv prints a deprecation warning for this table but still
+    # honors it, so a real `uv lock`/`uv sync` installs whatever's planted
+    # here just as much as a [dependency-groups] entry. Before this fix,
+    # parse_pyproject_toml returned [] against this exact file.
+    #
+    # A name here can still be [tool.uv.sources]-overridden exactly like a
+    # [project.dependencies] entry (confirmed live: a `path =` source made
+    # uv resolve the name from disk with zero PyPI requests) — the existing
+    # skip_names filtering in parse_pyproject_toml already covers this for
+    # any raw_specs contributor, so a sourced name here must NOT be
+    # reported either.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests>=2"]
+
+        [tool.uv]
+        dev-dependencies = [
+            "totally-hallucinated-uv-legacy-devdep-xyz-842",
+            "local-pkg",
+        ]
+
+        [tool.uv.sources]
+        local-pkg = { path = "./local_pkg" }
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "totally-hallucinated-uv-legacy-devdep-xyz-842"}
+
+
 def test_parse_pyproject_hatch_env_dependencies(tmp_path: Path):
     # Hatch (the PyPA-recommended build backend/env manager) has two of its
     # own dependency-bearing tables, neither PEP 621 nor PEP 735: a plain

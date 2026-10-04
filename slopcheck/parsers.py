@@ -580,6 +580,54 @@ def _pdm_dev_deps(data: dict) -> list[str]:
     return names
 
 
+def _uv_dev_deps(data: dict) -> list[str]:
+    """Flatten uv's legacy `[tool.uv] dev-dependencies` list into requirement specs.
+
+    uv predates PEP 735 and originally shipped its own flat list for
+    dev-only dependencies — structurally identical to `[project.dependencies]`
+    (a plain list of PEP 508 requirement strings) but under `[tool.uv]
+    dev-dependencies` instead of the now-standardized top-level
+    `[dependency-groups]` table `_dependency_groups_deps` already reads. uv's
+    own current docs steer `uv add --dev` toward writing `[dependency-groups]
+    dev = [...]` now, and real uv (0.12.19, installed on this box) prints
+    "warning: The `tool.uv.dev-dependencies` field ... is deprecated and
+    will be removed in a future release" the moment it sees the table — but
+    deprecated is not removed: confirmed live (`uv lock -v` against a scratch
+    pyproject.toml with `[tool.uv] dev-dependencies =
+    ["totally-hallucinated-uv-legacy-devdep-xyz-842"]` and nothing else
+    referencing that name) that uv genuinely sent `GET
+    https://pypi.org/simple/totally-hallucinated-uv-legacy-devdep-xyz-842/`
+    and failed resolution ("was not found in the package registry") — i.e.
+    a real `uv lock`/`uv sync` installs whatever is planted here just as
+    much as a `[dependency-groups]` entry does. Before this fix, nothing in
+    this module read `[tool.uv] dev-dependencies` at all (only
+    `[tool.uv.sources]`/`[tool.uv.workspace]`, both *sub*-tables of
+    `[tool.uv]`, were read), so any project still carrying this
+    still-honored legacy list (any uv project created before the
+    `[dependency-groups]` migration, or one that simply hasn't re-run `uv
+    add --dev` since) had every name in it silently never checked —
+    `parse_pyproject_toml` returned `[]` against this exact file — the same
+    silent false-all-clear shape already fixed here for PDM's own legacy
+    `[tool.pdm.dev-dependencies]` table.
+
+    A name in this list can still be `[tool.uv.sources]`-overridden exactly
+    like a `[project.dependencies]` entry — confirmed live (`uv lock -v`
+    with `[tool.uv] dev-dependencies = ["local-pkg"]` plus
+    `[tool.uv.sources] local-pkg = {path = "./local_pkg"}`): uv resolved
+    `local-pkg` straight from the local path with zero requests to
+    `pypi.org` for it. `parse_pyproject_toml`'s existing `skip_names` check
+    (built from `_uv_non_registry_names`) already applies to every entry in
+    `raw_specs` regardless of which reader contributed it, so folding this
+    list's output into `raw_specs` the same way `_pdm_dev_deps`'s already is
+    is sufficient — no separate skip-set wiring needed here.
+    """
+    names = []
+    for item in data.get("tool", {}).get("uv", {}).get("dev-dependencies", []):
+        if isinstance(item, str):
+            names.append(item)
+    return names
+
+
 def _setuptools_dynamic_files(spec) -> list[str]:
     if not isinstance(spec, dict):
         return []
@@ -1509,6 +1557,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
         + _poetry_deps(data)
         + _dependency_groups_deps(data)
         + _pdm_dev_deps(data)
+        + _uv_dev_deps(data)
     )
     skip_names = (
         _uv_non_registry_names(data) | _self_referential_name(data) | _poetry_non_registry_names(data)
