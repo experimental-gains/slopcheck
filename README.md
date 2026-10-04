@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.93
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.94
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.93
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.94
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.93
+    rev: v0.1.94
     hooks:
       - id: slopcheck
 ```
@@ -1301,6 +1301,21 @@ is handled the same way `requirements.txt`'s own non-canonical `.txt`
 names already are: works when scanned directly, or reached via
 `-r`-recursion, even though it isn't auto-discovered by a bare directory
 scan.
+
+A `pip:` entry spread across a backslash continuation (the same
+`pip-compile --generate-hashes` shape already handled for a standalone
+`requirements.txt` since v0.1.54) is now joined before parsing (fixed
+in v0.1.94). conda's `install()` writes each `pip:` YAML list entry
+into that same temp requirements file one physical line at a time, and
+the real `pip install -U -r` subprocess it runs is subject to pip's
+own backslash-continuation joining regardless of which file pip is
+reading — confirmed live with real pip 25.1.1: a two-line `pip:` entry
+(`totally-hallucinated-xyz-987 \` then `==1.2.3`) genuinely joins into
+one requirement and fails resolving it from PyPI. Before this fix,
+`parse_environment_yml` and the `pip:`-block file-discovery path never
+applied the join the standalone-requirements.txt path already got in
+v0.1.54 — a spec wrapped onto a continuation line matched neither half
+of the join-aware regex, so it was silently dropped instead of checked.
 
 A `-i`/`--extra-index-url`/`--index-url` directive in a `requirements.in`
 file (pip-tools' own hand-edited source file, added as a recognized
