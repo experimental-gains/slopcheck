@@ -3,6 +3,7 @@ from pathlib import Path
 
 from slopcheck.parsers import (
     ManifestParseError,
+    environment_yml_files_touched,
     find_manifests,
     npm_workspace_member_names,
     npm_workspace_root,
@@ -2856,6 +2857,81 @@ def test_parse_environment_yml_recurses_into_nested_r_file(tmp_path: Path):
     by_name = {dep.name: dep for dep in deps}
     assert by_name["requests"].source == str(tmp_path / "requirements-dev.txt")
     assert by_name["flask"].source == str(env_file)
+
+
+def test_parse_environment_yml_joins_backslash_continuation_in_pip_section(tmp_path: Path):
+    # Real-world find: conda's own `conda/env/installers/pip.py` `install()`
+    # writes every `pip:` list entry into a temp requirements file as its
+    # own physical line (`"\n".join(specs)`, confirmed by reading that
+    # function directly -- same source already cited in
+    # `test_parse_environment_yml_reads_pip_section_only` above) and runs a
+    # real `pip install -U -r <tmpfile>` subprocess against it. That temp
+    # file is just as subject to pip's own `req_file.join_lines`
+    # backslash-continuation joining as any other requirements.txt --
+    # confirmed live (real pip 25.1.1, `pip install --dry-run -r` against a
+    # temp file built the exact way conda's `install()` builds one, from a
+    # two-entry `pip:` list reading "totally-hallucinated-xyz-987 \\" then
+    # "==1.2.3"): pip genuinely joined them into one requirement and failed
+    # resolving it ("ERROR: Could not find a version that satisfies the
+    # requirement totally-hallucinated-xyz-987==1.2.3 (from versions:
+    # none)") -- the identical failure shape as the already-fixed
+    # standalone-requirements.txt case
+    # (test_parse_requirements_txt_joins_backslash_continuation above).
+    #
+    # Before this fix, `parse_environment_yml` passed the extracted `pip:`
+    # lines straight to `_parse_requirement_lines` with no
+    # continuation-joining at all (unlike `_parse_requirements_txt`, which
+    # already called `_join_backslash_continuations`): the first line's
+    # lone trailing "\\" doesn't match `_REQ_LINE_RE`, and the continuation
+    # line ("==1.2.3") has no leading name character either, so neither
+    # half ever became a `Dependency` -- the hallucinated name was silently
+    # never checked even though a real `conda env create` genuinely tries
+    # to resolve it. The same fix already shipped for requirements.txt in
+    # v0.1.54 was never ported to this independent extraction path.
+    env_file = tmp_path / "environment.yml"
+    env_file.write_text(
+        "\n".join(
+            [
+                "name: backslashtest",
+                "dependencies:",
+                "  - python=3.11",
+                "  - pip",
+                "  - pip:",
+                "    - totally-hallucinated-xyz-987 \\",
+                "    - ==1.2.3",
+                "    - requests==2.32.3",
+            ]
+        )
+    )
+    deps = parse_environment_yml(env_file)
+    names = {dep.name for dep in deps}
+    assert names == {"totally-hallucinated-xyz-987", "requests"}
+
+
+def test_environment_yml_files_touched_joins_backslash_continuation(tmp_path: Path):
+    # Sibling regression for `environment_yml_files_touched`, which shares
+    # `_environment_yml_pip_requirement_lines`'s raw-line extraction with
+    # `parse_environment_yml` above and had the identical pre-fix gap: a
+    # `-r`/`--requirement` directive split across a backslash continuation
+    # is just as real as a dependency spec split the same way, so it must
+    # be joined before `_REQ_FILE_RE` ever sees it.
+    (tmp_path / "base.txt").write_text("--extra-index-url https://pypi.internal.example/simple\n")
+    env_file = tmp_path / "environment.yml"
+    env_file.write_text(
+        "\n".join(
+            [
+                "name: backslashtouchedtest",
+                "dependencies:",
+                "  - python=3.11",
+                "  - pip",
+                "  - pip:",
+                "    - -r \\",
+                "    - base.txt",
+            ]
+        )
+    )
+    touched = environment_yml_files_touched(env_file)
+    assert tmp_path / "base.txt" in touched
 
 
 def test_find_manifests_discovers_environment_yml_and_yaml(tmp_path: Path):

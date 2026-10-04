@@ -99,10 +99,21 @@ def _strip_inline_comment(line: str) -> str:
 _WHOLE_LINE_COMMENT_RE = re.compile(r"^\s*#")
 
 
-def _join_backslash_continuations(text: str) -> list[str]:
+def _join_backslash_continuations(raw_lines: list[str]) -> list[str]:
+    """Join a physical line ending in a trailing `\\` with the line(s) that follow it.
+
+    Takes an already-split list of physical lines rather than raw text so a
+    caller whose lines didn't come from splitting one file's text verbatim —
+    `parse_environment_yml`'s conda `pip:` block, extracted one YAML list
+    item at a time rather than `text.splitlines()`'d — can reuse the exact
+    same join logic (see that function's own docstring for why it needs to:
+    conda writes each `pip:` entry into a real pip requirements file exactly
+    as `_parse_requirements_txt` already models for a standalone
+    requirements.txt).
+    """
     lines: list[str] = []
     buffer: list[str] = []
-    for raw_line in text.splitlines():
+    for raw_line in raw_lines:
         if raw_line.endswith("\\") and not _WHOLE_LINE_COMMENT_RE.match(raw_line):
             buffer.append(raw_line[:-1])
             continue
@@ -276,7 +287,9 @@ def _parse_requirements_txt(path: Path, seen: set[Path]) -> tuple[list[Dependenc
     except OSError as e:
         raise ManifestParseError(f"{path}: referenced requirements file not found ({e})") from e
 
-    return _parse_requirement_lines(_join_backslash_continuations(text), path.parent, str(path), seen)
+    return _parse_requirement_lines(
+        _join_backslash_continuations(text.splitlines()), path.parent, str(path), seen
+    )
 
 
 def _pep621_deps(data: dict) -> list[str]:
@@ -2520,14 +2533,39 @@ def parse_environment_yml(path: Path) -> list[Dependency]:
     logic `_parse_requirements_txt` already uses — with this file's own
     directory as the base for resolving a nested target, matching conda's
     real `get_pip_workdir()` exactly.
+
+    That same temp file conda hands to a real `pip install -U -r` subprocess
+    is also subject to pip's own backslash-continuation joining
+    (`_join_backslash_continuations`'s own docstring/`_parse_requirements_txt`
+    — pip's `req_file.join_lines` runs before any requirement is ever parsed
+    out of a line, regardless of which file pip is reading), since conda
+    writes each YAML `pip:` entry into that temp file as its own physical
+    line (`"\n".join(specs)`, read directly off conda's own source above) —
+    the exact same shape a standalone requirements.txt's lines are in once
+    split. Confirmed live (real pip 25.1.1, `pip install --dry-run -r`
+    against a temp file built the same way conda's `install()` builds one,
+    from a two-entry `pip:` list — `"totally-hallucinated-xyz-987 \\"` then
+    `"==1.2.3"`): pip genuinely joined them into one requirement and failed
+    resolving it exactly like the identical already-fixed standalone-
+    requirements.txt case ("ERROR: Could not find a version that satisfies
+    the requirement totally-hallucinated-xyz-987==1.2.3 (from versions:
+    none)"). Before this fix, this function passed
+    `_environment_yml_pip_requirement_lines`'s output straight to
+    `_parse_requirement_lines` with no continuation-joining at all: the
+    first line fails `_REQ_LINE_RE` (a lone trailing "\\" isn't a version
+    specifier) and the second starts with the version specifier alone (no
+    leading name character), so neither half ever became a `Dependency` —
+    the hallucinated name was silently never checked even though a real
+    `conda env create` genuinely tries to resolve it, the exact same
+    false-all-clear shape the sibling requirements.txt bug was fixed for in
+    v0.1.54, just never ported to this independent extraction path.
     """
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as e:
         raise ManifestParseError(f"{path}: couldn't read ({e})") from e
-    deps, _seen = _parse_requirement_lines(
-        _environment_yml_pip_requirement_lines(text), path.parent, str(path), set()
-    )
+    lines = _join_backslash_continuations(_environment_yml_pip_requirement_lines(text))
+    deps, _seen = _parse_requirement_lines(lines, path.parent, str(path), set())
     return deps
 
 
@@ -2578,14 +2616,19 @@ def environment_yml_files_touched(path: Path) -> set[Path]:
     all (conda extracts and rewrites its `pip:` list into a separate temp
     file first), so there's no sense in which environment.yml's own path is
     itself one of "the files pip reads."
+
+    Joins backslash continuations first, the same as `parse_environment_yml`
+    now does (see that function's own docstring) -- a `-r`/`--requirement`
+    directive split across a continuation the same way a dependency spec can
+    be would otherwise be just as invisible to this scan as it would be to
+    the dependency extraction this mirrors.
     """
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as e:
         raise ManifestParseError(f"{path}: couldn't read ({e})") from e
-    _deps, touched = _parse_requirement_lines(
-        _environment_yml_pip_requirement_lines(text), path.parent, str(path), set()
-    )
+    lines = _join_backslash_continuations(_environment_yml_pip_requirement_lines(text))
+    _deps, touched = _parse_requirement_lines(lines, path.parent, str(path), set())
     return touched
 
 
