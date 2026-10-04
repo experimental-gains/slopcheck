@@ -2734,12 +2734,47 @@ def _pnpm_workspace_overrides(text: str) -> dict[str, str]:
     `overrides:` block is always a flat mapping of quoted-or-bare string keys to
     quoted-or-bare string values, one level of indentation deep, confirmed against
     pnpm's own docs examples and real `pnpm-workspace.yaml` files it generates.
+
+    Strips a trailing inline comment from every line first, mirroring
+    `_pnpm_workspace_patterns`'s identical fix for this same file's `packages:` list
+    (and `_environment_yml_pip_requirement_lines`'s for `environment.yml`'s
+    `dependencies:`/`pip:` headers) -- this function was added later and never got
+    the same treatment, even though a real `pnpm-workspace.yaml` can annotate either
+    the `overrides:` header line or an individual entry exactly as readily as it can
+    annotate `packages:`/its own list items, since YAML comments are valid anywhere a
+    value isn't being spelled out. Confirmed live (pnpm 12.8.1, real `pnpm install`):
+    `overrides:  # pin overrides for CVEs` followed by `is-number: npm:totally-
+    hallucinated-pwyo-headercomment-xyz-789@1.0.0` made pnpm genuinely redirect
+    `is-number`'s fetch to the hallucinated alias target and fail with a real
+    `GET https://registry.npmjs.org/totally-hallucinated-pwyo-headercomment-xyz-789:
+    Not Found - 404` -- real pnpm's own YAML parser strips the header comment and
+    still applies the override. Before this fix, the header comment made
+    `top_match.group(2)` read as a non-empty inline value here, so `in_overrides`
+    was wrongly left `False` and the entire `overrides:` block -- the hallucinated
+    alias target included -- was silently dropped: `slopcheck` reported a clean
+    "1 dependency checked, all clean" (exit 0) against this exact file where real
+    `pnpm install` fails outright.
+
+    A trailing comment on an *entry* line corrupts the extracted value the same way,
+    just via a different symptom: confirmed live (pnpm 12.8.1) that `is-number:
+    npm:is-odd  # alias without pinned version, see security advisory` resolves
+    `is-number` to the real, existing `is-odd` package (pnpm's lockfile records
+    `specifier: npm:is-odd, version: is-odd@3.0.1`, zero registry errors) -- but
+    without stripping the comment first, `_pnpm_workspace_override_names`'s
+    `_npm_alias_target` found no `@` in `"is-odd  # alias without pinned version,
+    see security advisory"` (there's no pinned version to stop at) and returned the
+    whole polluted string as the "name," which `slopcheck` then reported as a plain
+    `not_found` hallucination on `registry.npmjs.org` -- a false positive on a
+    dependency a real `pnpm install` resolves cleanly.
     """
     overrides: dict[str, str] = {}
     in_overrides = False
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
+            continue
+        stripped = _strip_inline_comment(stripped)
+        if not stripped:
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         if indent == 0:

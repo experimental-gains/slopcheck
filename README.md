@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.96
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.97
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.96
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.97
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.96
+    rev: v0.1.97
     hooks:
       - id: slopcheck
 ```
@@ -1605,6 +1605,25 @@ the override/resolution name was always checked regardless of the
 value's shape, so a legitimate fork/local-path/private-tarball override
 on any of the three mechanisms was reported as a hallucinated `not_found`
 package.
+
+A trailing `#` comment anywhere in `pnpm-workspace.yaml`'s own
+`overrides:` block — on the header line itself, or on an individual
+entry — is now parsed correctly too (fixed in v0.1.97), the same
+comment-stripping gap already fixed for this same file's `packages:`
+list in v0.1.95 but never ported to this later-added sibling reader.
+Confirmed live (pnpm 12.8.1): `overrides:  # pin overrides for CVEs`
+followed by `is-number: npm:<hallucinated-name>@1.0.0` made a real
+`pnpm install` genuinely redirect `is-number`'s fetch to the alias
+target and fail with a real registry 404 — before this fix, the header
+comment made the whole `overrides:` block read as a non-empty inline
+value, so it was silently dropped and the hallucinated alias target was
+never checked at all. The entry-line variant has a different symptom:
+`is-number: npm:is-odd  # alias without pinned version, see security
+advisory` resolves cleanly to the real `is-odd` package in real pnpm
+(confirmed via its own lockfile), but without stripping the comment
+first, the alias-target extractor found no `@` to stop at and returned
+the whole comment-polluted string as the "name" — a false positive
+`not_found` on a dependency that installs fine.
 
 A PyPI package's "recent" age is now computed from its newest-released
 *non-yanked* file only, not the oldest file ever uploaded regardless of

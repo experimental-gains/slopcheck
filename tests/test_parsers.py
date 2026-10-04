@@ -559,6 +559,66 @@ def test_parse_manifest_pnpm_workspace_yaml_with_no_overrides_key_is_empty(tmp_p
     assert parse_manifest(path) == []
 
 
+def test_parse_manifest_pnpm_workspace_yaml_overrides_header_comment(tmp_path: Path):
+    # Regression test for a real-world find: `_pnpm_workspace_overrides` had
+    # zero handling for a trailing `#` comment anywhere in the `overrides:`
+    # block -- the exact same gap `_pnpm_workspace_patterns` (this same
+    # file's `packages:` reader) and `_environment_yml_pip_requirement_lines`
+    # were both already fixed for, just never ported to this later-added
+    # sibling function. Confirmed live (pnpm 12.8.1, real `pnpm install`): a
+    # root `pnpm-workspace.yaml` with `overrides:  # pin overrides for CVEs`
+    # followed by `is-number: npm:totally-hallucinated-pwyo-headercomment-
+    # xyz-789@1.0.0`, and a member depending on the real `is-number` with no
+    # other override, genuinely redirected `is-number`'s fetch to the alias
+    # target and failed with a real `GET https://registry.npmjs.org/
+    # totally-hallucinated-pwyo-headercomment-xyz-789: Not Found - 404` --
+    # pnpm's own YAML parser strips the header comment and still applies the
+    # override. Before this fix, the comment made `top_match.group(2)` read
+    # as a non-empty inline value, so `in_overrides` was wrongly left
+    # `False` and the entire `overrides:` block -- hallucinated alias target
+    # included -- was silently dropped, reproduced directly: `parse_manifest`
+    # returned zero dependencies for this exact file instead of flagging the
+    # alias target.
+    path = tmp_path / "pnpm-workspace.yaml"
+    path.write_text(
+        "packages:\n"
+        "  - 'packages/*'\n"
+        "overrides:  # pin overrides for CVEs\n"
+        "  is-number: npm:totally-hallucinated-pwyo-headercomment-xyz-789@1.0.0\n"
+    )
+
+    names = {dep.name for dep in parse_manifest(path)}
+
+    assert names == {"totally-hallucinated-pwyo-headercomment-xyz-789"}
+
+
+def test_parse_manifest_pnpm_workspace_yaml_overrides_entry_comment(tmp_path: Path):
+    # The other manifestation of the same gap: a trailing comment on an
+    # *entry* line corrupts the extracted value instead of hiding the whole
+    # block. Confirmed live (pnpm 12.8.1): `is-number: npm:is-odd  # alias
+    # without pinned version, see security advisory` resolves `is-number`
+    # to the real, existing `is-odd` package (pnpm's own lockfile records
+    # `specifier: npm:is-odd, version: is-odd@3.0.1`, zero registry errors)
+    # -- real pnpm's YAML parser strips the comment before ever looking at
+    # the value. Before this fix, `_npm_alias_target` found no `@` in the
+    # unstripped `"is-odd  # alias without pinned version, see security
+    # advisory"` (there's no pinned version to stop at) and returned the
+    # whole polluted string as the "name," which got checked against the
+    # registry and reported `not_found` -- a false positive on a dependency
+    # a real `pnpm install` resolves cleanly.
+    path = tmp_path / "pnpm-workspace.yaml"
+    path.write_text(
+        "packages:\n"
+        "  - 'packages/*'\n"
+        "overrides:\n"
+        "  is-number: npm:is-odd  # alias without pinned version, see security advisory\n"
+    )
+
+    names = {dep.name for dep in parse_manifest(path)}
+
+    assert names == {"is-odd"}
+
+
 def test_pdm_workspace_member_names_from_tool_pdm_workspace(tmp_path: Path):
     # Regression test for a real-world find: PDM's own workspace feature
     # (https://pdm-project.org/latest/usage/workspace/, added 2.28.0) is a
