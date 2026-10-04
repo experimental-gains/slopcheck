@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.94
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.95
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.94
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.95
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.94
+    rev: v0.1.95
     hooks:
       - id: slopcheck
 ```
@@ -1231,6 +1231,20 @@ sibling's name a plain `not_found` hallucination; scanning the whole
 tree (so the root's `pnpm-workspace.yaml` was itself among the scanned
 files) already worked correctly.
 
+A `pnpm-workspace.yaml` with a trailing `#` comment — on the `packages:`
+header line itself, or on an individual glob — is now parsed correctly
+(fixed in v0.1.95). YAML allows a comment anywhere a value isn't being
+spelled out, and real `pnpm-workspace.yaml` files use this to annotate
+either spot. Before this fix, a comment on the header line
+(`packages:  # list of workspace globs`) made the whole block read as a
+non-list inline value, silently dropping every pattern inside it; a
+comment on a glob line (`- 'packages/*'  # keep in sync with CI
+matrix`) folded the comment text into the pattern itself, so it never
+matched any real directory. Either shape made a real workspace member's
+dependency on a sibling package go unrecognized and reported as a
+fabricated `not_found` hallucination instead of resolved locally.
+Confirmed live by direct repro against both shapes.
+
 A conda `environment.yml`/`environment.yaml` is now recognized as a
 manifest too (fixed in v0.1.66 — earlier versions had no filename entry
 for either at all). conda's own documented "mixed" format lets a
@@ -1316,6 +1330,17 @@ one requirement and fails resolving it from PyPI. Before this fix,
 applied the join the standalone-requirements.txt path already got in
 v0.1.54 — a spec wrapped onto a continuation line matched neither half
 of the join-aware regex, so it was silently dropped instead of checked.
+
+A trailing `#` comment on the `dependencies:`/`pip:` header lines of an
+`environment.yml`/`environment.yaml` is now handled correctly too
+(fixed in v0.1.95 — the `environment.yml` sibling of the
+`pnpm-workspace.yaml` header-comment fix above, same root cause). A
+comment on either header line (e.g. `dependencies:  # conda + pip mix`
+or `pip:  # pypi-only extras`) made the key-match check read as
+non-empty/non-matching, so the entire nested `pip:` block was wrongly
+treated as absent — every PyPI name inside it, hallucinated or not, was
+silently never checked at all, the same false-all-clear shape already
+fixed once for this file in v0.1.66. Confirmed live by direct repro.
 
 A `-i`/`--extra-index-url`/`--index-url` directive in a `requirements.in`
 file (pip-tools' own hand-edited source file, added as a recognized

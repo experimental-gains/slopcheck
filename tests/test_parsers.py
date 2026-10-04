@@ -403,6 +403,41 @@ def test_pnpm_workspace_root_none_when_packages_pattern_does_not_match(tmp_path:
     assert pnpm_workspace_root(member) is None
 
 
+def test_pnpm_workspace_root_finds_ancestor_with_commented_packages_pattern(tmp_path: Path):
+    # Regression test for a real-world find: `_pnpm_workspace_patterns` had
+    # zero handling for a trailing `#` comment anywhere in
+    # `pnpm-workspace.yaml`, a real, common annotation on either the glob
+    # itself or the `packages:` header line (valid YAML everywhere a value
+    # isn't being spelled out). Confirmed live (no mocking, direct function
+    # test): a comment on the glob line folded the comment text into the
+    # pattern itself ("packages/*'  # keep in sync..."), which then never
+    # matched any real directory via `root.glob()`, so a legitimate local
+    # workspace member was reported as an unresolved `not_found`
+    # hallucination instead of recognized and skipped.
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'  # keep in sync with CI matrix\n")
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+
+    assert pnpm_workspace_root(member) == root
+
+
+def test_pnpm_workspace_root_finds_ancestor_with_commented_packages_header(tmp_path: Path):
+    # The other manifestation of the same gap: a comment on the `packages:`
+    # header line itself (e.g. `packages:  # list of workspace globs`) made
+    # `top_match.group(2)` read as a non-empty inline value, so the whole
+    # block was wrongly treated as not-a-block-sequence and every pattern
+    # inside it -- not just one -- was silently dropped.
+    root = tmp_path / "pnpm-monorepo"
+    root.mkdir()
+    (root / "pnpm-workspace.yaml").write_text("packages:  # list of workspace globs\n  - 'packages/*'\n")
+    member = root / "packages" / "app"
+    member.mkdir(parents=True)
+
+    assert pnpm_workspace_root(member) == root
+
+
 def test_pnpm_workspace_root_none_with_no_ancestor_workspace_file(tmp_path: Path):
     nested = tmp_path / "a" / "b" / "c"
     nested.mkdir(parents=True)
@@ -2808,6 +2843,34 @@ def test_parse_environment_yml_reads_pip_section_only(tmp_path: Path):
     }
     assert all(dep.ecosystem == "pypi" for dep in deps)
     assert all(dep.source == str(env_file) for dep in deps)
+
+
+def test_parse_environment_yml_reads_pip_section_with_commented_headers(tmp_path: Path):
+    # Regression test for a real-world find, the `environment.yml` sibling
+    # of `test_pnpm_workspace_root_finds_ancestor_with_commented_packages_
+    # header` above: `_environment_yml_pip_requirement_lines` had zero
+    # handling for a trailing `#` comment on the `dependencies:`/`pip:`
+    # header lines themselves (a real, common annotation, same as any other
+    # YAML key). Confirmed live (no mocking, direct function test): the
+    # comment made `top_match.group(2)`/the `"pip:"` equality check read as
+    # non-empty/non-matching, so the entire nested `pip:` block was wrongly
+    # treated as absent -- a hallucinated package name placed there was
+    # silently never checked at all, the exact false-all-clear shape this
+    # function's own docstring already describes fixing once before.
+    env_file = tmp_path / "environment.yml"
+    env_file.write_text(
+        "\n".join(
+            [
+                "dependencies:  # conda + pip mix",
+                "  - python=3.8.5",
+                "  - pip:  # pypi-only extras",
+                "    - totally-hallucinated-commentedheader-xyz-456",
+            ]
+        )
+    )
+    deps = parse_environment_yml(env_file)
+    names = {dep.name for dep in deps}
+    assert names == {"totally-hallucinated-commentedheader-xyz-456"}
 
 
 def test_parse_environment_yml_recurses_into_nested_r_file(tmp_path: Path):

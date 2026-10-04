@@ -2044,6 +2044,24 @@ def _pnpm_workspace_patterns(text: str) -> list[str]:
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        # Strip a trailing comment before any check below, not just the
+        # whole-line case above — real pnpm-workspace.yaml files
+        # routinely annotate either the `packages:` header line or an
+        # individual glob (YAML comments are valid anywhere a value
+        # isn't being spelled out), and leaving one on corrupts whatever
+        # it's attached to: on the header line, `top_match.group(2)`
+        # reads as a non-empty inline value, so the whole block is
+        # wrongly treated as not-a-block-sequence and every pattern
+        # inside it is silently dropped; on an item line, the comment
+        # text gets folded into the glob pattern itself, breaking the
+        # later `root.glob()` match. Verified live: both shapes made a
+        # real local pnpm workspace member's own dependency on a
+        # sibling package go unrecognized and get reported as a
+        # fabricated `not_found` hallucination instead of resolved
+        # locally.
+        stripped = _strip_inline_comment(stripped)
+        if not stripped:
+            continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         if indent == 0:
             top_match = _PNPM_WORKSPACE_TOP_KEY_RE.match(stripped)
@@ -2453,6 +2471,19 @@ def _environment_yml_pip_requirement_lines(text: str) -> list[str]:
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
+            continue
+        # Strip a trailing comment on the `dependencies:`/`pip:` header
+        # lines too, mirroring `_pnpm_workspace_patterns`'s identical
+        # fix — a real `environment.yml` commenting either key (e.g.
+        # `dependencies:  # conda + pip mix`) made `top_match.group(2)`
+        # read as a non-empty inline value, so the whole nested `pip:`
+        # block was wrongly treated as absent and every PyPI name inside
+        # it, hallucinated or not, was silently never checked at all —
+        # verified live with a real hallucinated package name inside
+        # such a commented header, the same false-all-clear shape this
+        # function's own docstring already describes fixing once before.
+        stripped = _strip_inline_comment(stripped)
+        if not stripped:
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         if indent == 0:
