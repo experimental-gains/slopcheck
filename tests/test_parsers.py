@@ -2113,6 +2113,35 @@ def test_find_manifests_prunes_non_dotted_virtualenv_directory_names(tmp_path: P
     assert found == {"requirements.txt"}
 
 
+def test_find_manifests_prunes_pdm_pypackages_directory(tmp_path: Path):
+    # PDM has a third, independent local-install mechanism with the same
+    # "contains already-installed packages' own manifests" shape as
+    # node_modules/venv above: PEP 582's `__pypackages__` directory, which
+    # `pdm install`/`pdm add` populate by default whenever
+    # `python.use_venv` is off (a real, current PDM mode, not deprecated)
+    # instead of creating any virtualenv — so neither the dot-prefix rule
+    # nor the venv/env-name rule prunes it. Confirmed live: real PDM 2.29.2
+    # with `python.use_venv = false`, `pdm add pandas` writes
+    # `__pypackages__/3.13/lib/pandas/pyproject.toml` (pandas' own ~90-entry
+    # dependency spec) into a project whose own pyproject.toml declares only
+    # `requests`/`pandas` — before this fix, scanning the project root
+    # reported 47 dependency results instead of 2, almost all of them
+    # pandas' own optional/test/doc dependencies unrelated to the project
+    # actually being scanned.
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "pdmtest"\ndependencies = ["requests", "pandas"]\n'
+    )
+    installed = tmp_path / "__pypackages__" / "3.13" / "lib" / "pandas"
+    installed.mkdir(parents=True)
+    (installed / "pyproject.toml").write_text(
+        '[project]\nname = "pandas"\ndependencies = ["numpy", "python-dateutil", "pytz"]\n'
+    )
+
+    found = {str(p.relative_to(tmp_path)) for p in find_manifests(tmp_path)}
+
+    assert found == {"pyproject.toml"}
+
+
 def test_parse_requirements_txt_strips_leading_utf8_bom(tmp_path: Path):
     # Real-world find: a `requirements.txt` saved by a Windows editor/tool can
     # carry a leading UTF-8 BOM. Without stripping it, the BOM character

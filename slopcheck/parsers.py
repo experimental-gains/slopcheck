@@ -3058,7 +3058,27 @@ PARSERS = {
 # `.../site-packages/numpy/f2py/setup.cfg`, both picked up by an unpruned
 # `find_manifests` walk and both invisible to it once `venv` is pruned the
 # same way `.venv` already is.
-_SKIP_DIR_NAMES = {"node_modules", "venv", "env", "ENV", "venv.bak", "env.bak"}
+#
+# PDM has a third, independent local-install mechanism with the identical
+# "contains already-installed packages' own manifests" shape: PEP 582's
+# `__pypackages__` directory (https://peps.python.org/pep-0582/), which `pdm
+# install`/`pdm add` populate by default whenever `python.use_venv` is off (a
+# real, current, non-deprecated PDM mode — PDM's own docs still document and
+# support it) instead of creating any virtualenv at all, so neither the
+# dot-prefix rule nor the `venv`/`env`-name rule above ever prunes it. Its
+# layout mirrors a virtualenv's `site-packages`
+# (`__pypackages__/<major>.<minor>/lib/<package>/...`), and real packages
+# installed into it carry the identical bundled-`pyproject.toml` leak already
+# fixed above for `.venv`/`venv`: confirmed live with real PDM 2.29.2
+# (`python.use_venv = false`), `pdm add pandas` writes
+# `__pypackages__/3.13/lib/pandas/pyproject.toml` (the same real ~90-entry
+# dependency spec as the venv case) into a project whose own `pyproject.toml`
+# declares only `requests`/`pandas` — before this fix, scanning that project
+# root reported 47 dependency results instead of 2, almost all of them
+# pandas' own optional/test/doc dependencies with no relation to the project
+# actually being scanned, the same pure-noise false-signal shape as the
+# node_modules/venv cases this set already exists to prevent.
+_SKIP_DIR_NAMES = {"node_modules", "venv", "env", "ENV", "venv.bak", "env.bak", "__pypackages__"}
 
 
 def find_manifests(root: Path) -> list[Path]:

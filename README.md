@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.99
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.100
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.99
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.100
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.99
+    rev: v0.1.100
     hooks:
       - id: slopcheck
 ```
@@ -438,7 +438,20 @@ equally real. A plain `venv` (no dot) sitting inside the scanned tree
 can carry an installed package's own bundled manifest the same way
 `.venv` already could: confirmed live, a fresh `venv` with pandas
 installed carries pandas' own `pyproject.toml`, adding 90 dependency
-specs unrelated to the project actually being scanned.
+specs unrelated to the project actually being scanned. PDM's PEP 582
+`__pypackages__` directory (used instead of any virtualenv whenever
+`python.use_venv` is off, a real, current, non-deprecated PDM mode) is
+now pruned the same way (fixed in v0.1.100) — neither the dot-prefix
+rule nor the `venv`/`env`-name rule above ever caught it, since it's
+spelled differently from both. Confirmed live with real PDM 2.29.2:
+`pdm add pandas` with `python.use_venv = false` writes
+`__pypackages__/3.13/lib/pandas/pyproject.toml` (pandas' own ~90-entry
+dependency spec) into a project whose own `pyproject.toml` declares
+only two real dependencies; scanning the project root before this fix
+reported 47 dependency results instead of 2, almost all of them
+pandas' own optional/test/doc dependencies with no relation to the
+project actually being scanned — the identical noise-flood false
+signal the node_modules/venv pruning above already exists to prevent.
 
 A manifest file with a leading UTF-8 byte-order mark — common from
 Windows-authored files, and real enough that `vitejs/vite`'s own repo
