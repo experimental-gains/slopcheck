@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.103
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.104
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.103
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.104
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.103
+    rev: v0.1.104
     hooks:
       - id: slopcheck
 ```
@@ -277,6 +277,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | `environment.yml`/`environment.yaml` (conda, `pip:` section only) | PyPI |
 | `pixi.toml` / `pyproject.toml`'s `[tool.pixi]` (pixi, `pypi-dependencies` only) | PyPI |
 | `tox.ini` (tox, `[testenv]`/`[testenv:name]` `deps` only) | PyPI |
+| `.pre-commit-config.yaml` (pre-commit, `additional_dependencies` only) | PyPI |
 | `package.json` | npm |
 
 ## What it isn't
@@ -904,6 +905,37 @@ recognized; a `-r`/`-c` directive and tox's own `{[testenv]deps}`
 cross-section-reference substitution are deliberately left unresolved
 rather than guessed at, since a real target routinely uses tox's own
 `{toxinidir}`-style substitution syntax this parser doesn't implement.
+
+pre-commit (https://pre-commit.com/, the real, extremely widely-used
+git-hook-management tool) had no `PARSERS`/`find_manifests` entry for
+its own config file, `.pre-commit-config.yaml`, at all until now (fixed
+in v0.1.104): a hook can install extra packages into its own isolated
+environment via `additional_dependencies` — most commonly type stubs
+and typed-library version pins for a `mypy` hook (`types-PyYAML`,
+`pydantic>=2.5.3`), or lint plugins for `flake8`/`pylint`. Confirmed
+live with real pre-commit 4.6.2: a scratch repo's `mirrors-mypy` hook
+with a hallucinated name planted in `additional_dependencies` made
+`pre-commit run` genuinely execute `pip install` inside the hook's own
+fresh virtualenv and fail with pip's real "Could not find a version
+that satisfies the requirement ... (from versions: none)" — before
+this fix, pointing `slopcheck` at a real `.pre-commit-config.yaml`
+directly raised "don't know how to parse this file", and a directory
+scan alongside it said nothing about it at all (this project's own
+`.pre-commit-hooks.yaml`-based install, see above, was itself
+unaffected by the gap in its *own* config — the gap was in scanning
+*other* projects' pre-commit config). Both ways a real
+`additional_dependencies` list is written in YAML are handled: a flow
+sequence (`['types-PyYAML', 'pydantic>=2.5.3']`, optionally split
+across several lines — a real, current example found on this box,
+axolotl's own `.pre-commit-config.yaml`, puts the opening `[` on its
+own line) and a block sequence (one `- item` per line). A
+version-pinned entry for a non-Python-language hook (e.g.
+`pre-commit/mirrors-eslint`'s own documented
+`additional_dependencies: ['eslint@4.15.0', ...]`) is correctly never
+misread as a PyPI name, since npm's `@`-joined version syntax doesn't
+match this tool's own PEP 508 name-extraction pattern at all — the same
+exclusion already applied to every other pip-specifier reader in this
+tool.
 
 The `[tool.uv.sources]` git/path/workspace/url skip above (the one that
 keeps `marimo_docs` from being flagged) was, until v0.1.41, applied to

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import textwrap
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -266,9 +267,34 @@ def _print_report(results: list[tuple[Dependency, LookupResult]]) -> None:
         print(f"  {labels[result.status]} {dep.ecosystem:5s} {dep.name}{detail} [{dep.source}]")
 
 
+class _NoHyphenBreakHelpFormatter(argparse.HelpFormatter):
+    """Wrap help text without breaking *inside* a hyphenated word.
+
+    `argparse`'s default formatter delegates to `textwrap.wrap`/`textwrap.fill`
+    with their own default `break_on_hyphens=True`, which is fine for an
+    ordinary hyphenated word but actively misleading for a filename like
+    `.pre-commit-config.yaml`: confirmed live, the real `slopcheck --help`
+    output (at this repo's own 79-column default) wrapped it mid-filename as
+    "...tox.ini, .pre-commit-\\nconfig.yaml)." -- readable as if "pre-commit-"
+    and "config.yaml" were two separate, unrelated list entries rather than
+    one filename split only because of where the line happened to end.
+    """
+
+    def _split_lines(self, text: str, width: int) -> list[str]:
+        text = self._whitespace_matcher.sub(" ", text).strip()
+        return textwrap.wrap(text, width, break_on_hyphens=False)
+
+    def _fill_text(self, text: str, width: int, indent: str) -> str:
+        text = self._whitespace_matcher.sub(" ", text).strip()
+        return textwrap.fill(
+            text, width, initial_indent=indent, subsequent_indent=indent, break_on_hyphens=False
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="slopcheck",
+        formatter_class=_NoHyphenBreakHelpFormatter,
         description=(
             "Check whether every dependency in your manifests actually exists in its "
             "registry, and flag suspiciously new packages. Catches hallucinated "
@@ -281,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Manifest files to check, or directories to search "
         "(requirements.txt, requirements.in, pyproject.toml, package.json, Pipfile, setup.cfg, "
-        "pylock.toml, environment.yml, pixi.toml, tox.ini). "
+        "pylock.toml, environment.yml, pixi.toml, tox.ini, .pre-commit-config.yaml). "
         "Defaults to the current directory.",
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of text.")
@@ -309,7 +335,8 @@ def main(argv: list[str] | None = None) -> int:
     if not manifests:
         print(
             "slopcheck: no requirements.txt, requirements.in, pyproject.toml, package.json, "
-            "Pipfile, setup.cfg, pylock.toml, environment.yml, pixi.toml, or tox.ini found",
+            "Pipfile, setup.cfg, pylock.toml, environment.yml, pixi.toml, tox.ini, or "
+            ".pre-commit-config.yaml found",
             file=sys.stderr,
         )
         return 2

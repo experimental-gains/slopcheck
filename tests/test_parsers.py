@@ -12,6 +12,7 @@ from slopcheck.parsers import (
     parse_package_json,
     parse_pipfile,
     parse_pixi_toml,
+    parse_pre_commit_config,
     parse_pylock_toml,
     parse_pyproject_toml,
     parse_requirements_txt,
@@ -2662,6 +2663,132 @@ def test_parse_tox_ini_ignores_unresolvable_requirement_file_reference(tmp_path:
     )
     names = {dep.name for dep in parse_tox_ini(tox_ini)}
     assert names == {"pytest"}
+
+
+def test_find_manifests_discovers_pre_commit_config(tmp_path: Path):
+    (tmp_path / ".pre-commit-config.yaml").write_text(
+        "repos:\n-   repo: foo\n    hooks:\n    -   id: mypy\n"
+    )
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert ".pre-commit-config.yaml" in found
+
+
+def test_parse_manifest_routes_pre_commit_config_to_its_own_parser(tmp_path: Path):
+    config = tmp_path / ".pre-commit-config.yaml"
+    config.write_text(
+        "repos:\n"
+        "-   repo: https://github.com/pre-commit/mirrors-mypy\n"
+        "    hooks:\n"
+        "    -   id: mypy\n"
+        "        additional_dependencies: ['pytest']\n"
+    )
+    names = {dep.name for dep in parse_manifest(config)}
+    assert names == {"pytest"}
+
+
+def test_parse_pre_commit_config_flow_style_split_across_lines(tmp_path: Path):
+    # Real-world find: pre-commit (https://pre-commit.com/) hooks can
+    # install extra packages into their own isolated environment via
+    # `additional_dependencies` -- most commonly type stubs/typed-library
+    # pins for a `mypy` hook. Before this fix, `.pre-commit-config.yaml`
+    # had no PARSERS/find_manifests entry at all, so a hallucinated name
+    # planted here was silently never scanned, both via directory
+    # discovery and when the file was pointed at directly ("don't know
+    # how to parse this file").
+    #
+    # Confirmed live with real pre-commit 4.6.2: a scratch repo with this
+    # exact shape (a mirrors-mypy hook, additional_dependencies carrying a
+    # hallucinated name) made `pre-commit run` genuinely execute `pip
+    # install . types-PyYAML totally-hallucinated-slopcheck-test-pkg-
+    # xyz-42==1.0.0` inside the hook's own fresh virtualenv and fail with
+    # pip's real "ERROR: Could not find a version that satisfies the
+    # requirement ... (from versions: none)".
+    #
+    # This exact multi-line-flow-sequence shape (the `[` on its own line
+    # after the colon, not on the same line) is axolotl's own real,
+    # current `.pre-commit-config.yaml` (found on this box), not a
+    # contrived fixture.
+    config = tmp_path / ".pre-commit-config.yaml"
+    config.write_text(
+        """
+        repos:
+        -   repo: https://github.com/pre-commit/mirrors-mypy
+            rev: v1.19.1
+            hooks:
+            - id: mypy
+              additional_dependencies:
+                [
+                    'types-PyYAML',
+                    'totally-hallucinated-slopcheck-precommit-xyz-42==1.0.0',
+                ]
+        """
+    )
+    names = {dep.name for dep in parse_pre_commit_config(config)}
+    assert names == {"types-PyYAML", "totally-hallucinated-slopcheck-precommit-xyz-42"}
+
+
+def test_parse_pre_commit_config_block_style_multiple_hooks(tmp_path: Path):
+    # Each hook's additional_dependencies list must be bounded
+    # independently -- a block-sequence entry in one hook must not bleed
+    # into a sibling hook's list, and vice versa.
+    config = tmp_path / ".pre-commit-config.yaml"
+    config.write_text(
+        """
+        repos:
+        - repo: https://github.com/pre-commit/mirrors-mypy
+          hooks:
+          - id: mypy
+            additional_dependencies:
+            - types-requests
+            - totally-hallucinated-precommit-block-xyz-1
+          - id: flake8
+            additional_dependencies:
+            - flake8-bugbear  # inline comment
+        """
+    )
+    names = {dep.name for dep in parse_pre_commit_config(config)}
+    assert names == {
+        "types-requests",
+        "totally-hallucinated-precommit-block-xyz-1",
+        "flake8-bugbear",
+    }
+
+
+def test_parse_pre_commit_config_node_ecosystem_hook_not_misread_as_pypi(tmp_path: Path):
+    # Deliberately out of scope, not a bug: a version-pinned npm-ecosystem
+    # hook's additional_dependencies (e.g. pre-commit/mirrors-eslint's own
+    # documented usage, `eslint@4.15.0`) must not be misread as a PyPI
+    # name. `@`-joined npm version syntax doesn't match `_REQ_LINE_RE` at
+    # all, the same way it's already excluded from every other
+    # pip-specifier reader in this module.
+    config = tmp_path / ".pre-commit-config.yaml"
+    config.write_text(
+        """
+        repos:
+        - repo: https://github.com/pre-commit/mirrors-eslint
+          hooks:
+          - id: eslint
+            additional_dependencies:
+            - eslint@4.15.0
+            - eslint-plugin-react@6.10.3
+        """
+    )
+    names = {dep.name for dep in parse_pre_commit_config(config)}
+    assert names == set()
+
+
+def test_parse_pre_commit_config_hook_without_additional_dependencies(tmp_path: Path):
+    config = tmp_path / ".pre-commit-config.yaml"
+    config.write_text(
+        """
+        repos:
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          hooks:
+          - id: check-yaml
+          - id: end-of-file-fixer
+        """
+    )
+    assert parse_pre_commit_config(config) == []
 
 
 def test_parse_manifest_unknown_extension_raises_clean_manifest_error(tmp_path: Path):

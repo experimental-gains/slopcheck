@@ -3113,6 +3113,152 @@ def parse_tox_ini(path: Path) -> list[Dependency]:
     return deps
 
 
+_PRE_COMMIT_ADDL_DEPS_KEY_RE = re.compile(r"^additional_dependencies:\s*(.*)$")
+
+
+def _pre_commit_additional_dependencies(text: str) -> list[str]:
+    """Extract every raw spec string from every hook's `additional_dependencies:` list in a `.pre-commit-config.yaml`.
+
+    pre-commit (https://pre-commit.com/, the real, extremely widely-used
+    git-hook-management tool PyCQA/Flask/Django/huggingface/axolotl and
+    countless other real projects use) lets a hook declare extra packages to
+    install into its own isolated environment via `additional_dependencies`
+    — most commonly type stubs and typed-library versions for a `mypy` hook
+    (`types-PyYAML`, `pydantic>=2.5.3`, ...) or lint plugins for `flake8`/
+    `pylint`. Before this fix, `.pre-commit-config.yaml` had no `PARSERS`/
+    `find_manifests` entry at all: a directory scan said nothing about it,
+    and pointing `slopcheck` directly at a real file raised "don't know how
+    to parse this file".
+
+    Confirmed live with real pre-commit 4.6.2: a scratch repo's
+    `.pre-commit-config.yaml` with a `mirrors-mypy` hook's
+    `additional_dependencies: ['types-PyYAML',
+    'totally-hallucinated-slopcheck-test-pkg-xyz-42==1.0.0']` made
+    `pre-commit run` genuinely execute `pip install . types-PyYAML
+    totally-hallucinated-slopcheck-test-pkg-xyz-42==1.0.0` inside the hook's
+    own fresh virtualenv and fail with pip's real "ERROR: Could not find a
+    version that satisfies the requirement ... (from versions: none)" — the
+    identical real-registry-resolution-failure shape this tool already
+    checks every other dependency table for. axolotl's own real, current
+    `.pre-commit-config.yaml` (found on this box) uses exactly this field
+    for its `mirrors-mypy` hook, confirming the shape is live, not
+    hypothetical.
+
+    Not a general YAML parser — same "hand-parse the subset of syntax that
+    matters" approach as `_pnpm_workspace_overrides`/
+    `_environment_yml_pip_requirement_lines` for their own files. Handles
+    both ways `additional_dependencies`'s value is written in real files:
+    a YAML flow sequence (`[...]`, optionally split across several lines —
+    axolotl's own file puts the `[` on its own line after the colon, not
+    on the same line) and a YAML block sequence (each entry its own
+    `- item` line, indented at or deeper than the key itself — both are
+    valid YAML and seen in real repos). Each hook's own list is bounded
+    independently: scanning stops the moment a block-sequence line's
+    indentation drops below the key's, or the line isn't itself a `-`
+    item, so one hook's entries never bleed into a sibling hook's.
+
+    Deliberately out of scope, not a bug: a *version-pinned* npm-ecosystem
+    hook (e.g. `pre-commit/mirrors-eslint`, whose own documented usage
+    example is `additional_dependencies: ['eslint@4.15.0',
+    'eslint-plugin-react@6.10.3']`) is correctly never misread as a PyPI
+    name — `@`-joined npm version syntax doesn't match `_REQ_LINE_RE` at
+    all (confirmed: `eslint@4.15.0` fails to match, `eslint` extracted from
+    `eslint-plugin-react@6.10.3` would be wrong but the `@` stops the match
+    before any name is extracted), the same way an npm `name@version`
+    string is already excluded from every pip-specifier reader in this
+    module. An *unpinned* bare node-ecosystem name (e.g. a hypothetical
+    `additional_dependencies: ['eslint']` with no version) would still be
+    misread as a PyPI name — but every real, documented usage example for
+    every node-language pre-commit mirror found during research pins a
+    version with `@`, so this residual edge isn't exercised by any
+    confirmed real file.
+    """
+    specs: list[str] = []
+    lines = text.splitlines()
+    i = 0
+    n = len(lines)
+    while i < n:
+        raw_line = lines[i]
+        stripped_raw = raw_line.strip()
+        if not stripped_raw or stripped_raw.startswith("#"):
+            i += 1
+            continue
+        stripped = _strip_inline_comment(stripped_raw)
+        key_match = _PRE_COMMIT_ADDL_DEPS_KEY_RE.match(stripped)
+        if not key_match:
+            i += 1
+            continue
+        key_indent = len(raw_line) - len(raw_line.lstrip(" "))
+        inline = key_match.group(1).strip()
+        i += 1
+
+        # Decide flow-vs-block from whichever line actually carries the
+        # first token: the key's own line (common single-line form) or,
+        # when the colon is immediately followed by a newline, the next
+        # non-blank/non-comment-only line (axolotl's own file: `[` sits on
+        # its own line after `additional_dependencies:`).
+        if not inline:
+            while i < n:
+                peek = lines[i].strip()
+                if not peek or peek.startswith("#"):
+                    i += 1
+                    continue
+                inline = _strip_inline_comment(peek)
+                i += 1
+                break
+
+        if inline.startswith("["):
+            flow_text = inline
+            while "]" not in flow_text and i < n:
+                flow_text += " " + _strip_inline_comment(lines[i].strip())
+                i += 1
+            if "]" in flow_text:
+                flow_text = flow_text[: flow_text.index("]") + 1]
+            items_text = flow_text.strip().removeprefix("[").removesuffix("]")
+            for item in items_text.split(","):
+                item = item.strip().strip("\"'")
+                if item:
+                    specs.append(item)
+        elif inline.startswith("-"):
+            block_items = [inline]
+            while i < n:
+                item_line = lines[i]
+                item_stripped_raw = item_line.strip()
+                if not item_stripped_raw:
+                    i += 1
+                    continue
+                item_indent = len(item_line) - len(item_line.lstrip(" "))
+                item_stripped = _strip_inline_comment(item_stripped_raw)
+                if item_indent < key_indent or not item_stripped.startswith("-"):
+                    break
+                block_items.append(item_stripped)
+                i += 1
+            for item_stripped in block_items:
+                item = item_stripped[1:].strip().strip("\"'")
+                if item:
+                    specs.append(item)
+        # else: empty/unrecognized value (e.g. `additional_dependencies: {}`)
+        # -- nothing to collect.
+    return specs
+
+
+def parse_pre_commit_config(path: Path) -> list[Dependency]:
+    """Parse a `.pre-commit-config.yaml`'s `additional_dependencies` lists. See
+    `_pre_commit_additional_dependencies` for the full real-world finding and
+    scope decisions this implements.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        raise ManifestParseError(f"{path}: couldn't read ({e})") from e
+    deps = []
+    for spec in _pre_commit_additional_dependencies(text):
+        match = _REQ_LINE_RE.match(spec)
+        if match:
+            deps.append(Dependency(match.group("name"), "pypi", str(path)))
+    return deps
+
+
 _PNPM_WORKSPACE_OVERRIDE_ENTRY_RE = re.compile(r"^([^:\s][^:]*):\s*(.*)$")
 
 
@@ -3295,6 +3441,7 @@ PARSERS = {
     "environment.yaml": parse_environment_yml,
     "pixi.toml": parse_pixi_toml,
     "tox.ini": parse_tox_ini,
+    ".pre-commit-config.yaml": parse_pre_commit_config,
 }
 
 
@@ -3439,7 +3586,7 @@ def parse_manifest(path: Path) -> list[Dependency]:
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
             "setup.cfg, pylock.toml, environment.yml/environment.yaml, pixi.toml, tox.ini, "
-            "or a *.txt/*.in requirements file)"
+            ".pre-commit-config.yaml, or a *.txt/*.in requirements file)"
         )
     try:
         return parser(path)
