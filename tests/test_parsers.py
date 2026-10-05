@@ -16,6 +16,7 @@ from slopcheck.parsers import (
     parse_pyproject_toml,
     parse_requirements_txt,
     parse_setup_cfg,
+    parse_tox_ini,
     pdm_workspace_member_names,
     pdm_workspace_root,
     pnpm_workspace_member_names,
@@ -2568,6 +2569,99 @@ def test_parse_pyproject_toml_reads_tool_pixi_pypi_dependencies(tmp_path: Path):
     )
     names = {dep.name for dep in parse_pyproject_toml(pyproject)}
     assert names == {"totally-hallucinated-pixi-pyproject-xyz-555", "pytest"}
+
+
+def test_find_manifests_discovers_tox_ini(tmp_path: Path):
+    (tmp_path / "tox.ini").write_text("[testenv]\ndeps =\n    pytest\n")
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "tox.ini" in found
+
+
+def test_parse_manifest_routes_tox_ini_to_tox_parser(tmp_path: Path):
+    tox_ini = tmp_path / "tox.ini"
+    tox_ini.write_text("[testenv]\ndeps =\n    pytest\n")
+    names = {dep.name for dep in parse_manifest(tox_ini)}
+    assert names == {"pytest"}
+
+
+def test_parse_tox_ini(tmp_path: Path):
+    # Real-world find: tox (https://tox.wiki/, a real, current, widely-used
+    # Python test-automation tool) had no PARSERS/find_manifests entry at
+    # all — a project's real test/lint dependencies, hallucinated names
+    # included, were silently never scanned, both via directory discovery
+    # and when `tox.ini` was pointed at directly ("don't know how to parse
+    # this file"). Confirmed live with real tox 4.64.8: `tox -e py313`
+    # against a [testenv] `deps` list containing a hallucinated name
+    # genuinely ran `python -I -m pip install pytest
+    # totally-hallucinated-tox-testdep-xyz-456` and failed with pip's real
+    # "Could not find a version that satisfies the requirement ... (from
+    # versions: none)".
+    #
+    # Every `[testenv:name]` section is read independently, not just the
+    # bare `[testenv]` default — a hallucinated name in a lint-only
+    # environment's `deps` is just as real a dependency as one in the
+    # default environment's. A tox factor-conditional prefix ("py39:
+    # pytest-cov", https://tox.wiki/en/latest/config.html#factor-
+    # conditional-settings) is stripped so the package name underneath is
+    # still recognized. A line using tox's own `{[testenv]deps}`
+    # cross-section-reference substitution (which this parser doesn't
+    # expand — see _tox_env_deps_lines's own docstring for why) is simply
+    # skipped rather than mistaken for a literal package name.
+    tox_ini = tmp_path / "tox.ini"
+    tox_ini.write_text(
+        """
+        [tox]
+        envlist = py313, lint
+
+        [testenv]
+        deps =
+            pytest
+            totally-hallucinated-tox-base-dep-111
+
+        [testenv:lint]
+        deps =
+            {[testenv]deps}
+            ruff
+            totally-hallucinated-tox-lint-dep-222
+
+        [testenv:factors]
+        deps =
+            py39,py310: pytest-cov
+            totally-hallucinated-tox-factor-dep-333
+        """
+    )
+    names = {dep.name for dep in parse_tox_ini(tox_ini)}
+    assert names == {
+        "pytest",
+        "totally-hallucinated-tox-base-dep-111",
+        "ruff",
+        "totally-hallucinated-tox-lint-dep-222",
+        "pytest-cov",
+        "totally-hallucinated-tox-factor-dep-333",
+    }
+
+
+def test_parse_tox_ini_ignores_unresolvable_requirement_file_reference(tmp_path: Path):
+    # tox's own substitution syntax (`{toxinidir}`, `{envname}`, ...) is
+    # routinely used inside a `-r`/`-c` target (e.g.
+    # `-r{toxinidir}/requirements-dev.txt`), which this parser doesn't
+    # implement. Naively joining tox.ini's own directory with the
+    # still-literal "{toxinidir}/requirements-dev.txt" text would raise a
+    # confusing ManifestParseError ("referenced requirements file not
+    # found") for a perfectly ordinary tox.ini, so a `-r`/`-c`-prefixed
+    # line is deliberately left unresolved rather than guessed at — this
+    # must not raise, and must not be mistaken for a plain package name.
+    tox_ini = tmp_path / "tox.ini"
+    tox_ini.write_text(
+        """
+        [testenv]
+        deps =
+            -r{toxinidir}/requirements-dev.txt
+            pytest
+        """
+    )
+    names = {dep.name for dep in parse_tox_ini(tox_ini)}
+    assert names == {"pytest"}
 
 
 def test_parse_manifest_unknown_extension_raises_clean_manifest_error(tmp_path: Path):

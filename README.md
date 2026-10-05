@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.102
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.103
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.102
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.103
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.102
+    rev: v0.1.103
     hooks:
       - id: slopcheck
 ```
@@ -276,6 +276,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | `pylock.toml`/`pylock.<name>.toml` (PEP 751 lock file) | PyPI |
 | `environment.yml`/`environment.yaml` (conda, `pip:` section only) | PyPI |
 | `pixi.toml` / `pyproject.toml`'s `[tool.pixi]` (pixi, `pypi-dependencies` only) | PyPI |
+| `tox.ini` (tox, `[testenv]`/`[testenv:name]` `deps` only) | PyPI |
 | `package.json` | npm |
 
 ## What it isn't
@@ -881,6 +882,28 @@ and runs `uv compile` against *that* file directly, never consulting
 the project's own `pyproject.toml`/`[tool.uv.sources]` — so the
 override table never applies, and a real `rye sync` still genuinely
 fails resolving the name from PyPI either way.
+
+tox (https://tox.wiki/, a real, current, widely-used Python
+test-automation tool) had no `PARSERS`/`find_manifests` entry at all
+until now (fixed in v0.1.103): its `tox.ini` lets a project pin real
+test/lint dependencies under `[testenv]`/`[testenv:name]` `deps`,
+structurally independent of `[project.dependencies]` entirely — a
+`tox.ini`-only project's test-time dependencies (pytest plugins,
+linters, type checkers) are routinely declared *only* here. Confirmed
+live with real tox 4.64.8: `tox -e py313` against a `[testenv] deps`
+list containing a hallucinated name genuinely ran `python -I -m pip
+install pytest totally-hallucinated-tox-testdep-xyz-456` and failed
+with pip's real "Could not find a version that satisfies the
+requirement ... (from versions: none)" — before this fix, pointing
+`slopcheck` at a real `tox.ini` directly raised "don't know how to
+parse this file", and a directory scan alongside it said nothing about
+`tox.ini` at all. Every `[testenv:name]` section is read
+independently, and tox's own factor-conditional prefix ("py39:
+pytest-cov") is stripped so the package name underneath is still
+recognized; a `-r`/`-c` directive and tox's own `{[testenv]deps}`
+cross-section-reference substitution are deliberately left unresolved
+rather than guessed at, since a real target routinely uses tox's own
+`{toxinidir}`-style substitution syntax this parser doesn't implement.
 
 The `[tool.uv.sources]` git/path/workspace/url skip above (the one that
 keeps `marimo_docs` from being flagged) was, until v0.1.41, applied to

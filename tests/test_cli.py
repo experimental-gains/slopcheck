@@ -895,7 +895,7 @@ def test_help_text_matches_source(capsys):
     assert "Manifest files to check, or directories to search" in normalized
     assert (
         "(requirements.txt, requirements.in, pyproject.toml, package.json, Pipfile, setup.cfg, "
-        "pylock.toml, environment.yml, pixi.toml). "
+        "pylock.toml, environment.yml, pixi.toml, tox.ini). "
         "Defaults to the current directory." in normalized
     )
     assert "Emit machine-readable JSON instead of text." in normalized
@@ -959,7 +959,7 @@ def test_no_manifests_error_message(tmp_path: Path, capsys):
     # still contains the real text as a substring.
     assert err == (
         "slopcheck: no requirements.txt, requirements.in, pyproject.toml, package.json, "
-        "Pipfile, setup.cfg, pylock.toml, environment.yml, or pixi.toml found\n"
+        "Pipfile, setup.cfg, pylock.toml, environment.yml, pixi.toml, or tox.ini found\n"
     )
 
 

@@ -2997,6 +2997,122 @@ def environment_yml_files_touched(path: Path) -> set[Path]:
     return touched
 
 
+# tox's own factor-conditional setting syntax
+# (https://tox.wiki/en/latest/config.html#factor-conditional-settings) lets a
+# line in `deps` (or any other setting) apply only under certain
+# environments, e.g. "py39,py310: pytest-cov" or the negated "!py38: black".
+# Real, current, and common: tox's own documentation leads with this exact
+# example. The factor-name character set (tox reads it with its own
+# `re.split(r"[,!]", factor_expr)`-style grammar, confirmed against tox
+# 4.64.8's `tox/config/loader/ini/factor.py`) is alphanumerics, underscore,
+# hyphen, and the `{...}`-brace shorthand for env-name expansion
+# (`py3{8,9}`); the colon is always followed by at least one space before
+# the real setting value in every real example tox's docs or source ship.
+# Requiring that trailing whitespace also keeps this from ever misfiring on
+# a URL line ("https://..." has no space after its colon) without needing a
+# separate special case for it.
+_TOX_FACTOR_PREFIX_RE = re.compile(r"^[A-Za-z0-9_!,{}.*-]+:\s+(?=\S)")
+
+
+def _tox_env_deps_lines(parser: configparser.ConfigParser, section: str) -> list[str]:
+    """Extract one `[testenv]`/`[testenv:name]` section's `deps` value as plain requirement-line strings.
+
+    Each physical line is a real PEP 508-ish pip requirement spec --- tox's
+    own docs (https://tox.wiki/en/latest/config.html#deps) describe `deps`
+    as "each line is a requirement spec that is passed to pip", and real
+    tox (4.64.8, confirmed live: `tox -e py313` against a `deps` list
+    containing a hallucinated name) runs a single `pip install` with every
+    resolved line as its own argument. A factor-conditional prefix
+    (`_TOX_FACTOR_PREFIX_RE`) is stripped first so the package name
+    underneath is still recognized, the same way `_strip_inline_comment`
+    strips a trailing pip-style "# comment" first elsewhere in this module.
+
+    Deliberately does NOT follow a `-r`/`-c` directive the way
+    `_parse_requirement_lines` does for an ordinary requirements.txt/
+    conda `pip:` block: a real tox.ini's `-r`/`-c` target routinely uses
+    tox's own substitution syntax (`-r{toxinidir}/requirements.txt`,
+    `-r{toxinidir}/requirements-{envname}.txt`), which this module doesn't
+    implement, and naively joining `base_dir` with the still-literal
+    `{toxinidir}`/`{envname}` text would either resolve to a path that can
+    never exist (raising a confusing `ManifestParseError` for a
+    perfectly ordinary tox.ini) or silently miss the substitution tox
+    itself performs differently per environment. A plain, no-substitution
+    `-r requirements-dev.txt` target would be resolvable, but there's no
+    reliable way to tell those two shapes apart without a tox-specific
+    substitution engine, so every `-r`/`-c`/`-e`/`--`-prefixed line and
+    every line still containing a literal tox substitution (`{...}`, e.g.
+    tox's own `{[testenv]deps}` cross-section-reference shorthand) is left
+    unmatched rather than guessed at, mirroring how a value this parser
+    can't make sense of is already handled elsewhere in this module (e.g.
+    `_setup_cfg_list_deps`'s `%(...)s`-interpolation case) -- skipped, not
+    crashed on.
+    """
+    if not parser.has_option(section, "deps"):
+        return []
+    lines = []
+    for raw_line in parser.get(section, "deps").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = _strip_inline_comment(line)
+        if not line:
+            continue
+        factor_match = _TOX_FACTOR_PREFIX_RE.match(line)
+        if factor_match:
+            line = line[factor_match.end() :]
+        if not line or "{" in line or line.startswith("-") or "://" in line:
+            continue
+        lines.append(line)
+    return lines
+
+
+def parse_tox_ini(path: Path) -> list[Dependency]:
+    """Parse tox's `tox.ini` `[testenv]`/`[testenv:name]` `deps` lists.
+
+    tox (https://tox.wiki/, a real, current, widely-used Python
+    test-automation tool — PyPA's own packaging guide recommends it) lets a
+    project pin real, version-controlled test/lint dependencies this way,
+    structurally independent of `[project.dependencies]`/
+    `pyproject.toml` entirely: a `tox.ini`-only testenv's `deps` is
+    routinely the *only* place a project's test-time dependencies (pytest
+    plugins, linters, type checkers) are declared at all. Before this fix,
+    `tox.ini` had no `PARSERS`/`find_manifests` entry whatsoever — confirmed
+    live, `slopcheck tox.ini` raised "don't know how to parse this file",
+    and scanning the containing directory alongside an unrelated manifest
+    reported that other manifest as fully clean while saying nothing about
+    `tox.ini` at all.
+
+    Confirmed live with real tox 4.64.8: `tox -e py313` against a
+    `[testenv] deps = pytest\\n    totally-hallucinated-tox-testdep-xyz-456`
+    genuinely ran `python -I -m pip install pytest
+    totally-hallucinated-tox-testdep-xyz-456` as its own install step and
+    failed with pip's real "Could not find a version that satisfies the
+    requirement ... (from versions: none)" — i.e. every name in `deps`
+    actually gets installed from the real registry, the same resolution
+    guarantee this module already checks for every other dependency-bearing
+    table.
+
+    Every `[testenv:name]` section (not just the bare `[testenv]` default)
+    is read independently: tox resolves each named environment's own
+    `deps` separately (optionally inheriting from `[testenv]` via the
+    `{[testenv]deps}` substitution this parser doesn't expand — see
+    `_tox_env_deps_lines`'s own docstring), and a hallucinated name planted
+    in a lint/type-check/docs-only environment's `deps` is just as real a
+    dependency as one in the default environment's.
+    """
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(path.read_text(encoding="utf-8-sig"), source=str(path))
+    deps = []
+    for section in parser.sections():
+        if section != "testenv" and not section.startswith("testenv:"):
+            continue
+        for line in _tox_env_deps_lines(parser, section):
+            match = _REQ_LINE_RE.match(line)
+            if match:
+                deps.append(Dependency(match.group("name"), "pypi", str(path)))
+    return deps
+
+
 _PNPM_WORKSPACE_OVERRIDE_ENTRY_RE = re.compile(r"^([^:\s][^:]*):\s*(.*)$")
 
 
@@ -3178,6 +3294,7 @@ PARSERS = {
     "environment.yml": parse_environment_yml,
     "environment.yaml": parse_environment_yml,
     "pixi.toml": parse_pixi_toml,
+    "tox.ini": parse_tox_ini,
 }
 
 
@@ -3321,7 +3438,7 @@ def parse_manifest(path: Path) -> list[Dependency]:
         raise ManifestParseError(
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
-            "setup.cfg, pylock.toml, environment.yml/environment.yaml, pixi.toml, "
+            "setup.cfg, pylock.toml, environment.yml/environment.yaml, pixi.toml, tox.ini, "
             "or a *.txt/*.in requirements file)"
         )
     try:
