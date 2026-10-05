@@ -755,6 +755,96 @@ def _rye_dev_deps(data: dict) -> list[str]:
     return names
 
 
+def _toml_tox_env_deps(tox: dict) -> list[str]:
+    """Flatten tox's *native-TOML* config's env tables' `deps` into requirement specs.
+
+    Since tox 4.21 (https://tox.wiki/en/latest/config.html#toml-based-configuration,
+    a real, current, documented feature — not a draft/experimental one), tox has a
+    second, completely independent way to be configured: a native TOML table (as
+    opposed to the INI-syntax `[testenv]`/`[testenv:name]` sections `parse_tox_ini`
+    already reads), embedded either in a standalone `tox.toml` file or, just as
+    validly, in a project's own `pyproject.toml` under `[tool.tox]` — tox's own
+    config-source search tries `tox.ini`, then `tox.toml`, then `pyproject.toml`'s
+    `[tool.tox]`, then `setup.cfg`, using whichever is found first (confirmed live:
+    tox 4.64.9 in an otherwise-empty directory reports "No loadable tox.ini or
+    setup.cfg or pyproject.toml or tox.toml found"). Before this fix, nothing in
+    this module read `[tool.tox]` at all, and `tox.toml` had no `PARSERS`/
+    `find_manifests` entry either — the identical "second file format for the same
+    real tool, never wired in" gap already found and fixed for pixi (standalone
+    `pixi.toml` plus `[tool.pixi]` in pyproject.toml, run #210).
+
+    Confirmed real and current, not hypothetical: hukkin/mdformat (a popular,
+    actively-maintained CommonMark formatter, itself commonly used as a pre-commit
+    hook) configures its entire tox setup this way — its real, current
+    `pyproject.toml` has no `[testenv]` INI section anywhere, only
+    `[tool.tox.env_run_base]`/`[tool.tox.env."mypy"]`/etc. Live-verified directly
+    with real tox 4.64.9 (not just read from docs): a scratch `pyproject.toml`'s
+    `[tool.tox.env.py313] deps = ["pytest",
+    "totally-hallucinated-slopcheck-tox-native-xyz-999"]` made `tox -e py313`
+    genuinely run `python -I -m pip install pytest
+    totally-hallucinated-slopcheck-tox-native-xyz-999` and fail with pip's real
+    "Could not find a version that satisfies the requirement ... (from versions:
+    none)" — before this fix, `parse_pyproject_toml` reported that exact file as
+    fully clean. Also confirmed the standalone `tox.toml` form resolves identically
+    (same schema, just rooted at the file's top level instead of under
+    `[tool.tox]`), and that a factor-template environment's `[env_base.<name>]`
+    table (used by multiple generated env names sharing one factor-conditional
+    `deps` list, e.g. `[env_base.unit] factors = ["py313"] deps = [...]`) is just
+    as genuinely resolved: `tox -e unit-py313` against that shape also ran a real
+    `pip install` naming the planted hallucinated dependency and failed the same
+    way.
+
+    A `deps` value can be a single string or (far more commonly) an array —
+    tox's own JSON schema (`tox/tox.schema.json`) allows each array item to be
+    either a plain string or one of several `{replace = ...}`-style extension
+    tables (env-var/posargs/glob/conditional substitution, the TOML-native
+    equivalent of a `{posargs}`/`{toxinidir}`-style INI substitution token) —
+    confirmed real in mdformat's own file, e.g. `{ replace = "posargs", default =
+    [...], extend = true }` used inside `commands`. Non-string entries are
+    skipped rather than guessed at, the same "can't make sense of it, skip rather
+    than crash or misparse" approach `_tox_env_deps_lines` already takes for an
+    INI `deps` line still containing a literal `{...}` substitution token. A
+    plain string that itself names a cross-table substitution (e.g. mdformat's
+    own `"{[tool.tox.env_run_base]deps}"`, the TOML-native spelling of the INI
+    `{[testenv]deps}` shorthand `_tox_env_deps_lines` already skips) or a
+    `-r`/`-c`-prefixed requirements-file reference needs no special-casing here
+    either: both start with a character `_REQ_LINE_RE` can't match as a package
+    name, so they're already dropped by the shared matching loop in
+    `parse_pyproject_toml`/`parse_tox_toml`, exactly like `_pdm_dev_deps`'s own
+    `-e`/URL entries.
+
+    Reads every table tox itself can source a real environment's `deps` from:
+    `env_run_base` (the base applied to every ordinary run environment unless
+    overridden), `env_pkg_base` (the base for the packaging environment), each
+    named `env.<name>` table, and each named `env_base.<name>` template table
+    (used by factor-generated environment names) — deliberately not attempting
+    to resolve which base an environment without its own `deps` actually
+    inherits, the same "collect every real source unconditionally, don't model
+    which one wins" approach `_hatch_deps`'s override-table reader already takes.
+    """
+
+    def _deps_of(table) -> list[str]:
+        if not isinstance(table, dict):
+            return []
+        deps = table.get("deps")
+        if isinstance(deps, str):
+            deps = [deps]
+        if not isinstance(deps, list):
+            return []
+        return [item for item in deps if isinstance(item, str)]
+
+    specs = _deps_of(tox.get("env_run_base", {})) + _deps_of(tox.get("env_pkg_base", {}))
+    envs = tox.get("env", {})
+    if isinstance(envs, dict):
+        for env_conf in envs.values():
+            specs += _deps_of(env_conf)
+    env_base = tox.get("env_base", {})
+    if isinstance(env_base, dict):
+        for base_conf in env_base.values():
+            specs += _deps_of(base_conf)
+    return specs
+
+
 def _setuptools_dynamic_files(spec) -> list[str]:
     if not isinstance(spec, dict):
         return []
@@ -1800,6 +1890,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
         + _hatch_build_deps(data)
         + _pixi_pypi_deps(data.get("tool", {}).get("pixi", {}))
         + _rye_dev_deps(data)
+        + _toml_tox_env_deps(data.get("tool", {}).get("tox", {}))
     )
     for spec in independent_table_specs:
         spec = _require_str_spec(spec, path)
@@ -3113,6 +3204,28 @@ def parse_tox_ini(path: Path) -> list[Dependency]:
     return deps
 
 
+def parse_tox_toml(path: Path) -> list[Dependency]:
+    """Parse a standalone `tox.toml`'s native-TOML env tables. See
+    `_toml_tox_env_deps` for the full real-world finding and scope decisions
+    this implements — `tox.toml`'s own schema is identical to a
+    `pyproject.toml`'s `[tool.tox]` table, just rooted at the file's top
+    level instead of nested under `tool.tox` (confirmed directly against
+    tox's own loader source, `tox/config/source/toml_tox.py`: it reuses the
+    exact same `pyproject.toml`/`[tool.tox]` loader with an empty section
+    prefix). Before this fix, `tox.toml` had no `PARSERS`/`find_manifests`
+    entry at all, the same "don't know how to parse this file"/"no ...
+    found" gap already fixed for `pixi.toml`/`tox.ini`/
+    `.pre-commit-config.yaml`.
+    """
+    data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    deps = []
+    for spec in _toml_tox_env_deps(data):
+        match = _REQ_LINE_RE.match(spec.strip())
+        if match:
+            deps.append(Dependency(match.group("name"), "pypi", str(path)))
+    return deps
+
+
 _PRE_COMMIT_ADDL_DEPS_KEY_RE = re.compile(r"^additional_dependencies:\s*(.*)$")
 
 
@@ -3441,6 +3554,7 @@ PARSERS = {
     "environment.yaml": parse_environment_yml,
     "pixi.toml": parse_pixi_toml,
     "tox.ini": parse_tox_ini,
+    "tox.toml": parse_tox_toml,
     ".pre-commit-config.yaml": parse_pre_commit_config,
 }
 
@@ -3586,7 +3700,7 @@ def parse_manifest(path: Path) -> list[Dependency]:
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
             "setup.cfg, pylock.toml, environment.yml/environment.yaml, pixi.toml, tox.ini, "
-            ".pre-commit-config.yaml, or a *.txt/*.in requirements file)"
+            "tox.toml, .pre-commit-config.yaml, or a *.txt/*.in requirements file)"
         )
     try:
         return parser(path)

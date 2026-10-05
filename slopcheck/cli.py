@@ -307,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Manifest files to check, or directories to search "
         "(requirements.txt, requirements.in, pyproject.toml, package.json, Pipfile, setup.cfg, "
-        "pylock.toml, environment.yml, pixi.toml, tox.ini, .pre-commit-config.yaml). "
+        "pylock.toml, environment.yml, pixi.toml, tox.ini, tox.toml, .pre-commit-config.yaml). "
         "Defaults to the current directory.",
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of text.")
@@ -335,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     if not manifests:
         print(
             "slopcheck: no requirements.txt, requirements.in, pyproject.toml, package.json, "
-            "Pipfile, setup.cfg, pylock.toml, environment.yml, pixi.toml, tox.ini, or "
+            "Pipfile, setup.cfg, pylock.toml, environment.yml, pixi.toml, tox.ini, tox.toml, or "
             ".pre-commit-config.yaml found",
             file=sys.stderr,
         )

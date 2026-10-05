@@ -18,6 +18,7 @@ from slopcheck.parsers import (
     parse_requirements_txt,
     parse_setup_cfg,
     parse_tox_ini,
+    parse_tox_toml,
     pdm_workspace_member_names,
     pdm_workspace_root,
     pnpm_workspace_member_names,
@@ -2663,6 +2664,122 @@ def test_parse_tox_ini_ignores_unresolvable_requirement_file_reference(tmp_path:
     )
     names = {dep.name for dep in parse_tox_ini(tox_ini)}
     assert names == {"pytest"}
+
+
+def test_find_manifests_discovers_tox_toml(tmp_path: Path):
+    (tmp_path / "tox.toml").write_text('[env_run_base]\ndeps = ["pytest"]\n')
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "tox.toml" in found
+
+
+def test_parse_manifest_routes_tox_toml_to_tox_toml_parser(tmp_path: Path):
+    tox_toml = tmp_path / "tox.toml"
+    tox_toml.write_text('[env_run_base]\ndeps = ["pytest"]\n')
+    names = {dep.name for dep in parse_manifest(tox_toml)}
+    assert names == {"pytest"}
+
+
+def test_parse_tox_toml(tmp_path: Path):
+    # Real-world find: since tox 4.21 (https://tox.wiki/en/latest/config.html#toml-based-configuration),
+    # tox has a second, completely independent config format: native TOML,
+    # either in a standalone tox.toml or embedded in pyproject.toml's
+    # [tool.tox] (see test_parse_pyproject_toml_reads_tool_tox_env_deps
+    # below) -- neither was read by this tool at all before this fix.
+    # hukkin/mdformat's own real, current pyproject.toml configures tox
+    # entirely this way, with no tox.ini anywhere. Confirmed live with
+    # real tox 4.64.9: a `[env.py313] deps = ["pytest",
+    # "totally-hallucinated-slopcheck-tox-native-xyz-999"]` table made
+    # `tox -e py313` genuinely run `python -I -m pip install pytest
+    # totally-hallucinated-slopcheck-tox-native-xyz-999` and fail with
+    # pip's real "Could not find a version that satisfies the requirement
+    # ... (from versions: none)"; a `[env_base.unit] factors = ["py313"]`
+    # factor-template table (used by multiple generated env names sharing
+    # one deps list) resolves identically under `tox -e unit-py313`.
+    tox_toml = tmp_path / "tox.toml"
+    tox_toml.write_text(
+        """
+        env_list = ["py313"]
+
+        [env_run_base]
+        deps = ["pytest", "totally-hallucinated-tox-toml-base-111"]
+
+        [env_pkg_base]
+        deps = ["setuptools", "totally-hallucinated-tox-toml-pkgbase-222"]
+
+        [env.py313]
+        deps = [
+            "{[env_run_base]deps}",
+            "ruff",
+            "totally-hallucinated-tox-toml-env-333",
+        ]
+
+        [env_base.unit]
+        factors = ["py313"]
+        deps = ["totally-hallucinated-tox-toml-envbase-444"]
+
+        [env.docs]
+        deps = []
+        """
+    )
+    names = {dep.name for dep in parse_tox_toml(tox_toml)}
+    assert names == {
+        "pytest",
+        "totally-hallucinated-tox-toml-base-111",
+        "setuptools",
+        "totally-hallucinated-tox-toml-pkgbase-222",
+        "ruff",
+        "totally-hallucinated-tox-toml-env-333",
+        "totally-hallucinated-tox-toml-envbase-444",
+    }
+
+
+def test_parse_tox_toml_ignores_non_string_deps_entry(tmp_path: Path):
+    # tox's own JSON schema (tox/tox.schema.json) allows a `deps` array
+    # item to be a `{replace = ...}`-style substitution-extension table
+    # instead of a plain string (confirmed real in mdformat's own
+    # `commands` usage of the identical extension). Must not crash, and
+    # must not be mistaken for a literal package name.
+    tox_toml = tmp_path / "tox.toml"
+    tox_toml.write_text(
+        """
+        [env.py313]
+        deps = [
+            "pytest",
+            { replace = "posargs", default = ["mypy"], extend = true },
+        ]
+        """
+    )
+    names = {dep.name for dep in parse_tox_toml(tox_toml)}
+    assert names == {"pytest"}
+
+
+def test_parse_pyproject_toml_reads_tool_tox_env_deps(tmp_path: Path):
+    # tox's own documented alternative to a standalone tox.toml: identical
+    # tables embedded under a pyproject.toml's [tool.tox] -- hukkin/mdformat's
+    # actual real pyproject.toml uses exactly this form for its whole tox
+    # setup. Confirmed live (tox 4.64.9): a `[tool.tox.env.py313] deps`
+    # entry with no [project.dependencies] equivalent made a real `tox -e
+    # py313` genuinely fail resolving the hallucinated name from PyPI --
+    # before this fix, parse_pyproject_toml never read [tool.tox] at all.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = []
+
+        [tool.tox]
+        env_list = ["py313"]
+
+        [tool.tox.env_run_base]
+        deps = ["pytest"]
+
+        [tool.tox.env."py313"]
+        deps = ["totally-hallucinated-slopcheck-tox-native-xyz-999"]
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"pytest", "totally-hallucinated-slopcheck-tox-native-xyz-999"}
 
 
 def test_find_manifests_discovers_pre_commit_config(tmp_path: Path):

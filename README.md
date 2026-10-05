@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.104
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.105
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.104
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.105
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.104
+    rev: v0.1.105
     hooks:
       - id: slopcheck
 ```
@@ -277,6 +277,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | `environment.yml`/`environment.yaml` (conda, `pip:` section only) | PyPI |
 | `pixi.toml` / `pyproject.toml`'s `[tool.pixi]` (pixi, `pypi-dependencies` only) | PyPI |
 | `tox.ini` (tox, `[testenv]`/`[testenv:name]` `deps` only) | PyPI |
+| `tox.toml` / `pyproject.toml`'s `[tool.tox]` (tox's native-TOML config, `deps` only) | PyPI |
 | `.pre-commit-config.yaml` (pre-commit, `additional_dependencies` only) | PyPI |
 | `package.json` | npm |
 
@@ -905,6 +906,30 @@ recognized; a `-r`/`-c` directive and tox's own `{[testenv]deps}`
 cross-section-reference substitution are deliberately left unresolved
 rather than guessed at, since a real target routinely uses tox's own
 `{toxinidir}`-style substitution syntax this parser doesn't implement.
+
+Since tox 4.21, tox also has a second, completely independent
+configuration format: a native TOML table, either in a standalone
+`tox.toml` or embedded in a project's own `pyproject.toml` under
+`[tool.tox]` — neither was read at all until now (fixed in v0.1.105).
+Confirmed real and current: hukkin/mdformat's actual `pyproject.toml`
+configures tox entirely this way, with no `tox.ini` anywhere.
+Live-verified with real tox 4.64.9: a `[tool.tox.env.py313] deps =
+["pytest", "totally-hallucinated-slopcheck-tox-native-xyz-999"]` table
+made `tox -e py313` genuinely run `python -I -m pip install pytest
+totally-hallucinated-slopcheck-tox-native-xyz-999` and fail with pip's
+real "Could not find a version that satisfies the requirement ...
+(from versions: none)" — before this fix, `slopcheck` reported that
+exact file as fully clean, and a standalone `tox.toml` naming the same
+file raised "don't know how to parse this file". `env_run_base` (the
+base applied to every ordinary environment), `env_pkg_base` (the
+packaging environment's base), every named `env.<name>` table, and
+every named `env_base.<name>` factor-template table are all read, the
+same "collect every real source" approach already used for Hatch's own
+override tables; a non-string `deps` array entry (tox's own
+`{replace = ...}`-style substitution extension) and a plain string
+naming a cross-table substitution (e.g. mdformat's own
+`"{[tool.tox.env_run_base]deps}"`) are both left alone rather than
+guessed at.
 
 pre-commit (https://pre-commit.com/, the real, extremely widely-used
 git-hook-management tool) had no `PARSERS`/`find_manifests` entry for
