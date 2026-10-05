@@ -1596,6 +1596,77 @@ def test_parse_pyproject_uv_legacy_dev_dependencies(tmp_path: Path):
     assert names == {"requests", "totally-hallucinated-uv-legacy-devdep-xyz-842"}
 
 
+def test_parse_pyproject_rye_dev_dependencies(tmp_path: Path):
+    # Rye (https://rye.astral.sh/, largely merged into uv but still a real,
+    # separately-installed tool) writes its own dev-only dependencies under
+    # `[tool.rye] dev-dependencies` -- a flat list of PEP 508 requirement
+    # strings, structurally identical to `[tool.uv] dev-dependencies` above
+    # but under Rye's own table. Confirmed live with real Rye 0.44.0: `rye
+    # sync -v` against exactly this shape genuinely sent a request to
+    # https://pypi.org/simple/<name>/ and failed resolution ("was not found
+    # in the package registry ... we can conclude that your requirements
+    # are unsatisfiable"), aborting with "error: could not write dev
+    # lockfile for project". Before this fix, nothing in this module read
+    # `[tool.rye]` at all, so parse_pyproject_toml silently dropped the
+    # hallucinated name and reported only `requests`/`hatchling`.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests>=2"]
+
+        [tool.rye]
+        managed = true
+        dev-dependencies = [
+            "totally-hallucinated-rye-devdep-xyz-901",
+        ]
+
+        [build-system]
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"requests", "hatchling", "totally-hallucinated-rye-devdep-xyz-901"}
+
+
+def test_parse_pyproject_rye_dev_dependencies_ignore_uv_sources_override(tmp_path: Path):
+    # Unlike `[tool.uv] dev-dependencies`, a name in `[tool.rye]
+    # dev-dependencies` is NOT skip_names-eligible via a same-named
+    # `[tool.uv.sources]` local-path override, even though Rye delegates its
+    # regular dependency resolution to uv under the hood. Confirmed live
+    # (Rye 0.44.0): `rye sync -v`'s own debug log shows it materializes the
+    # dev-dependencies list into a standalone temporary `requirements.txt`
+    # and runs `uv compile` against *that* temp file directly ("Failed to
+    # run uv compile /tmp/.../requirements.txt"), never against the
+    # project's own pyproject.toml -- so the override table never enters
+    # into it, and resolution still genuinely hit
+    # https://pypi.org/simple/<name>/ and failed exactly like the plain
+    # hallucinated-name case. A same-named [tool.uv.sources] path override
+    # must therefore NOT suppress this report, unlike the `_uv_dev_deps`
+    # case in test_parse_pyproject_uv_legacy_dev_dependencies above.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = ["requests>=2"]
+
+        [tool.rye]
+        managed = true
+        dev-dependencies = [
+            "totally-unique-local-rye-override-pkg-55214",
+        ]
+
+        [tool.uv.sources]
+        totally-unique-local-rye-override-pkg-55214 = { path = "./localpkg" }
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert "totally-unique-local-rye-override-pkg-55214" in names
+
+
 def test_parse_pyproject_hatch_env_dependencies(tmp_path: Path):
     # Hatch (the PyPA-recommended build backend/env manager) has two of its
     # own dependency-bearing tables, neither PEP 621 nor PEP 735: a plain

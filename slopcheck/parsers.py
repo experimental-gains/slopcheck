@@ -705,6 +705,56 @@ def _uv_dev_deps(data: dict) -> list[str]:
     return names
 
 
+def _rye_dev_deps(data: dict) -> list[str]:
+    """Flatten Rye's `[tool.rye] dev-dependencies` list into requirement specs.
+
+    Rye (https://rye.astral.sh/, largely merged into uv but still a real,
+    separately-installed tool — `rye init`/`rye add` both still work with
+    current Rye 0.44.0) writes its own dev-only dependencies to a flat list
+    of PEP 508 requirement strings under `[tool.rye] dev-dependencies` —
+    structurally identical to `[tool.uv] dev-dependencies` (`_uv_dev_deps`
+    above) but under Rye's own table, never `[tool.uv]`. Before this fix,
+    nothing in this module read `[tool.rye]` at all, so a hallucinated name
+    planted here sailed through unchecked — confirmed live: a `pyproject.toml`
+    with `[project] dependencies = ["requests"]` and `[tool.rye]
+    dev-dependencies = ["totally-hallucinated-rye-devdep-xyz-901"]` was
+    reported as fully clean (only `requests` and the `[build-system]`
+    backend were checked).
+
+    Rye genuinely resolves this table, not just stores it inertly: real `rye
+    sync` (0.44.0) against that exact file printed "Because
+    totally-hallucinated-rye-devdep-xyz-901 was not found in the package
+    registry ... we can conclude that your requirements are unsatisfiable"
+    and aborted with "error: could not write dev lockfile for project" — the
+    same live-verified "a real sync/lock genuinely hits the registry and
+    fails" shape already established for `_uv_dev_deps`/`_pdm_dev_deps`.
+
+    Unlike `_uv_dev_deps`, a name here is *not* skip_names-eligible via
+    `[tool.uv.sources]` even though Rye delegates its regular dependency
+    resolution to uv under the hood: confirmed live with a second scratch
+    project naming an identical `[tool.uv.sources] <name> = { path = ... }`
+    local-path override for the same name that also appears in `[tool.rye]
+    dev-dependencies` — `rye sync -v`'s own debug log shows it materializes
+    the dev-dependencies list into a standalone temporary
+    `requirements.txt` and runs `uv compile` against *that* temp file
+    directly ("Failed to run uv compile /tmp/.../requirements.txt"), not
+    against the project's own `pyproject.toml` — so the override table never
+    enters into it at all, and the dev-dependency resolution still genuinely
+    hit `https://pypi.org/simple/<name>/` and failed the exact same way as
+    the plain-hallucinated-name case above. This is the same
+    "independent of [tool.uv.sources]/Poetry overrides" shape
+    `_build_system_deps`'s own docstring already describes for `[build-
+    system] requires` — so, like that table (and unlike `_uv_dev_deps`),
+    this one is folded into `parse_pyproject_toml`'s `independent_table_specs`
+    rather than `raw_specs`, deliberately bypassing `skip_names`.
+    """
+    names = []
+    for item in data.get("tool", {}).get("rye", {}).get("dev-dependencies", []):
+        if isinstance(item, str):
+            names.append(item)
+    return names
+
+
 def _setuptools_dynamic_files(spec) -> list[str]:
     if not isinstance(spec, dict):
         return []
@@ -1749,6 +1799,7 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
         + _hatch_deps(data)
         + _hatch_build_deps(data)
         + _pixi_pypi_deps(data.get("tool", {}).get("pixi", {}))
+        + _rye_dev_deps(data)
     )
     for spec in independent_table_specs:
         spec = _require_str_spec(spec, path)
