@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.101
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.102
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.101
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.102
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.101
+    rev: v0.1.102
     hooks:
       - id: slopcheck
 ```
@@ -857,6 +857,30 @@ alone, the same reasoning already applied to `environment.yml`'s own
 conda `dependencies:` list; a `pypi-dependencies` entry whose value is
 a table naming a local `path` or a `git`/`url` source is excluded too,
 mirroring Poetry's/uv's own git/path/url table forms.
+
+Rye (https://rye.astral.sh/, largely merged into uv but still a real,
+separately-installed tool) writes its own dev-only dependencies under
+`[tool.rye] dev-dependencies` — structurally identical to `[tool.uv]
+dev-dependencies` (see below) but under its own table, which nothing
+in this tool read until now (fixed in v0.1.102). Confirmed live with
+real Rye 0.44.0: `rye sync -v` against a `pyproject.toml` with
+`[project] dependencies = ["requests"]` and `[tool.rye]
+dev-dependencies = ["totally-hallucinated-rye-devdep-xyz-901"]`
+genuinely sent a request to `https://pypi.org/simple/<name>/` and
+failed resolution ("was not found in the package registry ... we can
+conclude that your requirements are unsatisfiable"), aborting with
+"error: could not write dev lockfile for project" — before this fix,
+`slopcheck` scanning that exact file reported only `requests`/
+`hatchling` as checked and said nothing about the hallucinated dev
+dependency. Unlike `[tool.uv] dev-dependencies`, a name here is not
+suppressed by a same-named `[tool.uv.sources]` local-path override
+even though Rye delegates its regular resolution to uv under the hood:
+confirmed live that `rye sync -v`'s own debug log materializes the
+dev-dependencies list into a standalone temporary `requirements.txt`
+and runs `uv compile` against *that* file directly, never consulting
+the project's own `pyproject.toml`/`[tool.uv.sources]` — so the
+override table never applies, and a real `rye sync` still genuinely
+fails resolving the name from PyPI either way.
 
 The `[tool.uv.sources]` git/path/workspace/url skip above (the one that
 keeps `marimo_docs` from being flagged) was, until v0.1.41, applied to
