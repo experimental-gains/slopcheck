@@ -204,7 +204,7 @@ the [latest tagged release](https://github.com/experimental-gains/slopcheck/rele
 for a stable version rather than floating HEAD:
 
 ```bash
-pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.100
+pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.101
 ```
 
 ## Usage
@@ -230,7 +230,7 @@ into CI:
 ```yaml
 - name: Check for hallucinated dependencies
   run: |
-    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.100
+    pip install git+https://github.com/experimental-gains/slopcheck.git@v0.1.101
     slopcheck
 ```
 
@@ -239,7 +239,7 @@ into CI:
 ```yaml
 repos:
   - repo: https://github.com/experimental-gains/slopcheck
-    rev: v0.1.100
+    rev: v0.1.101
     hooks:
       - id: slopcheck
 ```
@@ -275,6 +275,7 @@ experimental-gains/claude-plugins`, same install command with `copilot`).
 | `setup.cfg` (setuptools) | PyPI |
 | `pylock.toml`/`pylock.<name>.toml` (PEP 751 lock file) | PyPI |
 | `environment.yml`/`environment.yaml` (conda, `pip:` section only) | PyPI |
+| `pixi.toml` / `pyproject.toml`'s `[tool.pixi]` (pixi, `pypi-dependencies` only) | PyPI |
 | `package.json` | npm |
 
 ## What it isn't
@@ -835,6 +836,27 @@ hallucinated name planted in any of its four dependency-bearing
 sub-fields sailed through unchecked even though a real `pip install .`/
 `pip wheel .`/`python -m build` genuinely tries to resolve it before
 the build even starts.
+
+pixi (https://pixi.sh, an actively-developed conda+PyPI package
+manager from prefix.dev) has its own `pypi-dependencies`/
+`feature.<name>.pypi-dependencies` tables — in a standalone `pixi.toml`,
+or embedded under a pyproject.toml's `[tool.pixi]` — and neither was
+recognized at all before this fix (added in v0.1.101): a standalone
+`pixi.toml` had no `PARSERS`/`find_manifests` entry (`slopcheck .`
+against a real `pixi init`-generated project reported "no
+requirements.txt, ... found" even with a hallucinated PyPI dependency
+sitting right there), and `parse_pyproject_toml` never read
+`[tool.pixi]` at all. Confirmed live with real pixi 0.81.0: `pixi
+install` against a `pypi-dependencies` table (or its `[tool.pixi]`
+pyproject.toml equivalent) with a hallucinated name genuinely failed
+resolving it from PyPI ("was not found in the package registry"), the
+same real dependency-resolution gap this tool exists to catch
+pre-emptively. `[dependencies]`/`[feature.<name>.dependencies]` (conda-
+channel packages, resolved from a conda channel, not PyPI) are left
+alone, the same reasoning already applied to `environment.yml`'s own
+conda `dependencies:` list; a `pypi-dependencies` entry whose value is
+a table naming a local `path` or a `git`/`url` source is excluded too,
+mirroring Poetry's/uv's own git/path/url table forms.
 
 The `[tool.uv.sources]` git/path/workspace/url skip above (the one that
 keeps `marimo_docs` from being flagged) was, until v0.1.41, applied to

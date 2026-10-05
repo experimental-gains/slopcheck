@@ -1595,6 +1595,102 @@ def _require_str_spec(spec, path: Path) -> str:
     return spec
 
 
+def _is_pixi_registry_dep(spec) -> bool:
+    """Whether a pixi `pypi-dependencies` entry resolves against PyPI at all.
+
+    Pixi (https://pixi.sh/latest/python/pyproject_toml/#pypi-dependencies,
+    a real, actively-developed conda+PyPI package manager from prefix.dev)
+    lets a `pypi-dependencies` entry be either a plain version-spec string
+    or a table carrying `path`/`git`/`url` to install from a local
+    directory/VCS remote/arbitrary URL instead of PyPI -- the identical
+    non-registry-source shape already handled for Poetry's/uv's own table
+    forms (`_is_poetry_registry_dep`). A bare string still names a real
+    PyPI package even when it's pixi's own `"*"` any-version wildcard
+    (not valid PEP 440, but still genuinely resolved against PyPI --
+    confirmed live, pixi 0.81.0: `pixi install` against a `pypi-
+    dependencies` table with `totally-hallucinated-pixi-pypi-xyz-789 =
+    "*"` failed with "was not found in the package registry"); a table
+    with only `version`/`extras`/`index` keys is the same, just spelled
+    as a table instead of a string. A table carrying `path`/`git`/`url`
+    is not -- confirmed live: `pixi add --pypi --path ./localpkg localpkg`
+    wrote `localpkg = { path = "localpkg" }`, which a real `pixi install`
+    resolves from disk with zero PyPI requests.
+    """
+    if isinstance(spec, dict):
+        return not any(key in spec for key in ("git", "path", "url"))
+    return True
+
+
+def _pixi_pypi_deps(pixi: dict) -> list[str]:
+    """Flatten a pixi config's default and per-feature `pypi-dependencies` tables into registry names.
+
+    Pixi (https://pixi.sh/latest/python/pyproject_toml/, "Added in 0.20.0")
+    keeps conda-channel packages (`[dependencies]`/`[feature.<name>.
+    dependencies]`, resolved against a conda channel, not PyPI -- checking
+    one against PyPI would be a false positive, the same reasoning already
+    applied to `environment.yml`'s own conda `dependencies:` list) and
+    PyPI-only packages (`[pypi-dependencies]`/`[feature.<name>.pypi-
+    dependencies]`) in separate tables. Only the latter is read here.
+    `feature`-scoped tables are real and commonly used even when a feature
+    isn't wired into any environment yet -- confirmed live (pixi 0.81.0):
+    `pixi add --pypi --feature test pytest` wrote `[feature.test.pypi-
+    dependencies] pytest = "*"` while leaving the default `[pypi-
+    dependencies]` table untouched, and the project-wide `pixi.toml`'s
+    `[dependencies]`/`[pypi-dependencies]` tables (the "default feature")
+    are genuinely merged into every environment pixi solves, per pixi's own
+    docs on the implicit default feature.
+
+    Called with two different roots depending on manifest shape: a
+    standalone `pixi.toml`'s own top-level dict (where these tables sit
+    directly under the file root), or a `pyproject.toml`'s
+    `data["tool"]["pixi"]` sub-dict (pixi's own documented alternative of
+    embedding identical tables under `[tool.pixi]` instead of a sibling
+    `pixi.toml` file -- confirmed live: a hand-written `[tool.pixi.pypi-
+    dependencies] totally-hallucinated-pixi-pyproject-xyz-555 = "*"` with
+    no corresponding `[project.dependencies]` entry made a real `pixi
+    install` fail resolving that name from PyPI exactly like the
+    standalone-`pixi.toml` case).
+    """
+    names = []
+    for name, spec in pixi.get("pypi-dependencies", {}).items():
+        if _is_pixi_registry_dep(spec):
+            names.append(name)
+    for feature in pixi.get("feature", {}).values():
+        if not isinstance(feature, dict):
+            continue
+        for name, spec in feature.get("pypi-dependencies", {}).items():
+            if _is_pixi_registry_dep(spec):
+                names.append(name)
+    return names
+
+
+def parse_pixi_toml(path: Path) -> list[Dependency]:
+    """Parse a standalone pixi.toml's `[pypi-dependencies]`/`[feature.*.pypi-dependencies]` tables.
+
+    Before this fix, `pixi.toml` had no `PARSERS`/`find_manifests` entry at
+    all -- unlike `.txt`/`.in`, there's no generic-suffix fallback for
+    `.toml` files the way `parse_manifest` treats any unmatched `.txt` file
+    as `requirements.txt`-shaped, so a pixi-only project's entire PyPI
+    dependency list, hallucinated names included, was silently never
+    scanned: `slopcheck .` against a real `pixi init`-generated directory
+    reported "no requirements.txt, requirements.in, pyproject.toml,
+    package.json, Pipfile, setup.cfg, pylock.toml, or environment.yml
+    found" (exit code 2) even with a `pixi.toml` sitting right there naming
+    a hallucinated PyPI dependency, and pointing slopcheck directly at the
+    file (`slopcheck pixi.toml`) hit `ManifestParseError`'s own "don't know
+    how to parse this file" message. Confirmed live (pixi 0.81.0,
+    `pixi init . --format pixi` then `pixi add python` + `pixi add --pypi
+    requests` to get a real-shaped file, then a hand-added hallucinated
+    `pypi-dependencies` entry): `pixi install` against that same file
+    genuinely resolved `requests` and failed on the fake name ("was not
+    found in the package registry"), the exact live dependency-resolution
+    gap this tool exists to catch pre-emptively.
+    """
+    data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    names = _pixi_pypi_deps(data)
+    return [Dependency(name, "pypi", str(path)) for name in names]
+
+
 def parse_pyproject_toml(path: Path) -> list[Dependency]:
     # skip_names (derived from [tool.uv.sources]'s git/path/workspace/url
     # entries, [tool.poetry.dependencies]'s equivalent git/path/url overrides
@@ -1648,7 +1744,13 @@ def parse_pyproject_toml(path: Path) -> list[Dependency]:
             if _normalize_name(name) in skip_names:
                 continue
             deps.append(Dependency(name, "pypi", str(path)))
-    for spec in _build_system_deps(data) + _hatch_deps(data) + _hatch_build_deps(data):
+    independent_table_specs = (
+        _build_system_deps(data)
+        + _hatch_deps(data)
+        + _hatch_build_deps(data)
+        + _pixi_pypi_deps(data.get("tool", {}).get("pixi", {}))
+    )
+    for spec in independent_table_specs:
         spec = _require_str_spec(spec, path)
         match = _REQ_LINE_RE.match(spec.strip())
         if match:
@@ -3024,6 +3126,7 @@ PARSERS = {
     "pnpm-workspace.yaml": _parse_pnpm_workspace_yaml,
     "environment.yml": parse_environment_yml,
     "environment.yaml": parse_environment_yml,
+    "pixi.toml": parse_pixi_toml,
 }
 
 
@@ -3167,8 +3270,8 @@ def parse_manifest(path: Path) -> list[Dependency]:
         raise ManifestParseError(
             f"{path}: don't know how to parse this file "
             "(expected requirements.txt, pyproject.toml, package.json, Pipfile, "
-            "setup.cfg, pylock.toml, environment.yml/environment.yaml, or a *.txt/"
-            "*.in requirements file)"
+            "setup.cfg, pylock.toml, environment.yml/environment.yaml, pixi.toml, "
+            "or a *.txt/*.in requirements file)"
         )
     try:
         return parser(path)

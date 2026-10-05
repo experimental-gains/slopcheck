@@ -11,6 +11,7 @@ from slopcheck.parsers import (
     parse_manifest,
     parse_package_json,
     parse_pipfile,
+    parse_pixi_toml,
     parse_pylock_toml,
     parse_pyproject_toml,
     parse_requirements_txt,
@@ -2397,6 +2398,105 @@ def test_find_manifests_discovers_non_canonical_requirements_filenames(tmp_path:
         "requirements_test.txt",
         str(Path("requirements", "base.txt")),
     }
+
+
+def test_find_manifests_discovers_pixi_toml(tmp_path: Path):
+    (tmp_path / "pixi.toml").write_text(
+        '[workspace]\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n'
+        '\n[pypi-dependencies]\nrequests = "*"\n'
+    )
+    found = {p.name for p in find_manifests(tmp_path)}
+    assert "pixi.toml" in found
+
+
+def test_parse_manifest_routes_pixi_toml_to_pixi_parser(tmp_path: Path):
+    pixi = tmp_path / "pixi.toml"
+    pixi.write_text('[pypi-dependencies]\nrequests = "*"\n')
+    names = {dep.name for dep in parse_manifest(pixi)}
+    assert names == {"requests"}
+
+
+def test_parse_pixi_toml(tmp_path: Path):
+    # Real-world find: pixi (https://pixi.sh, an actively-developed
+    # conda+PyPI package manager from prefix.dev) had no PARSERS/
+    # find_manifests entry at all — a pixi-only project's entire PyPI
+    # dependency list, hallucinated names included, was silently never
+    # scanned, both via directory discovery ("slopcheck: no requirements.txt,
+    # ... found") and when pointed at the file directly
+    # (ManifestParseError's "don't know how to parse this file"). Confirmed
+    # live with real pixi 0.81.0 (`pixi init . --format pixi`, `pixi add
+    # python`, `pixi add --pypi requests`, then a hand-added hallucinated
+    # entry): `pixi install` genuinely resolved `requests` from PyPI and
+    # failed on the fake name ("was not found in the package registry").
+    #
+    # `[dependencies]` (conda-channel packages, e.g. the real `python`
+    # entry pixi itself writes) must NOT be checked against PyPI — the
+    # same reasoning already applied to environment.yml's own conda
+    # `dependencies:` list. A `pypi-dependencies` entry whose value is a
+    # table with `path`/`git`/`url` (confirmed live: `pixi add --pypi
+    # --path ./localpkg localpkg` wrote `localpkg = { path = "localpkg" }`)
+    # resolves from disk/a VCS remote, not PyPI, and must be excluded the
+    # same way Poetry's/uv's own git/path/url table forms already are.
+    # `[feature.<name>.pypi-dependencies]` (confirmed live: `pixi add
+    # --pypi --feature test pytest` wrote a real, separately-resolved
+    # table even before the feature is wired into any environment) is a
+    # second, independent source of real PyPI names.
+    pixi = tmp_path / "pixi.toml"
+    pixi.write_text(
+        """
+        [workspace]
+        channels = ["conda-forge"]
+        platforms = ["linux-64"]
+
+        [dependencies]
+        python = ">=3.14,<3.15"
+
+        [pypi-dependencies]
+        requests = ">=2.34.2, <3"
+        totally-hallucinated-pixi-pypi-xyz-789 = "*"
+        localpkg = { path = "localpkg" }
+
+        [feature.test.pypi-dependencies]
+        pytest = "*"
+        """
+    )
+    names = {dep.name for dep in parse_pixi_toml(pixi)}
+    assert names == {"requests", "totally-hallucinated-pixi-pypi-xyz-789", "pytest"}
+
+
+def test_parse_pyproject_toml_reads_tool_pixi_pypi_dependencies(tmp_path: Path):
+    # pixi's own documented alternative to a standalone pixi.toml: identical
+    # tables embedded under a pyproject.toml's [tool.pixi]. Confirmed live
+    # (pixi 0.81.0): a hand-written [tool.pixi.pypi-dependencies] entry with
+    # no corresponding [project.dependencies] entry made a real `pixi
+    # install` fail resolving the fake name from PyPI exactly like the
+    # standalone-pixi.toml case — before this fix, parse_pyproject_toml
+    # never read [tool.pixi] at all, so this table's names (unlike pixi's
+    # own default behavior of mirroring default-feature pypi-dependencies
+    # into [project.dependencies], which parse_pyproject_toml already
+    # covered via _pep621_deps) were silently never checked.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+        [project]
+        name = "demo"
+        dependencies = []
+
+        [tool.pixi.workspace]
+        channels = ["conda-forge"]
+
+        [tool.pixi.dependencies]
+        python = ">=3.11"
+
+        [tool.pixi.pypi-dependencies]
+        totally-hallucinated-pixi-pyproject-xyz-555 = "*"
+
+        [tool.pixi.feature.test.pypi-dependencies]
+        pytest = "*"
+        """
+    )
+    names = {dep.name for dep in parse_pyproject_toml(pyproject)}
+    assert names == {"totally-hallucinated-pixi-pyproject-xyz-555", "pytest"}
 
 
 def test_parse_manifest_unknown_extension_raises_clean_manifest_error(tmp_path: Path):
